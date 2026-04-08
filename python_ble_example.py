@@ -68,6 +68,16 @@ class BLESensorApp:
         self.resp_buffer         = bytearray()
         self.pending_temp_request = False
 
+        # 校准向导
+        self.calibration_wizard_running = False
+        self._calibration_after_id = None
+        self._calibration_samples = []
+        self._calibration_stable_count = 0
+        self._calibration_target_weight = None
+        self._calibration_target_text = ""
+        self._calibration_baseline_weight = None
+        self._calibration_has_confirmed_load = False
+
         # 三点滑动窗口
         self.THRESHOLD_DETECT = 30.0
         self.THRESHOLD_KEEP   = 5.0
@@ -213,8 +223,21 @@ class BLESensorApp:
         self.calib_actual_entry.insert(0, "1.000")
         self.calib_actual_entry.pack(side=tk.LEFT, padx=2)
         tk.Label(calib_row, text="kg", bg="#f4f4f4", font=("SimHei", 9)).pack(side=tk.LEFT)
-        tk.Button(right, text="发送校准",
-                  command=self.send_calibration, **plain_btn).pack(**pad)
+        tk.Button(right, text="一键校准向导",
+                  command=self.start_calibration_wizard, **plain_btn).pack(**pad)
+        self.cancel_calibration_button = tk.Button(
+            right, text="取消校准向导",
+            command=self.cancel_calibration_wizard,
+            state=tk.DISABLED, **plain_btn
+        )
+        self.cancel_calibration_button.pack(**pad)
+        self.calibration_status_label = tk.Label(
+            right,
+            text="向导：未开始",
+            bg="#f4f4f4", fg="#555", font=("SimHei", 9),
+            wraplength=200, justify=tk.LEFT
+        )
+        self.calibration_status_label.pack(**pad)
 
         # 比例系数
         self._section(right, "比例系数")
@@ -286,9 +309,25 @@ class BLESensorApp:
         if n_total > 0 or n_left > 0 or n_right > 0:
             self.ax.relim()
             self.ax.autoscale_view()
-            y_min, y_max = self.ax.get_ylim()
-            if y_max <= 20:
-                self.ax.set_ylim(y_min, 20)
+
+            y_values = []
+            if n_total > 0:
+                y_values.extend(total_y[-n_total:])
+            if n_left > 0:
+                y_values.extend(left_y[-n_left:])
+            if n_right > 0:
+                y_values.extend(right_y[-n_right:])
+
+            if y_values:
+                data_min = min(y_values)
+                data_max = max(y_values)
+                y_upper = max(20, data_max)
+                if y_upper == data_min:
+                    padding = max(1.0, abs(y_upper) * 0.1)
+                else:
+                    padding = max(1.0, (y_upper - data_min) * 0.1)
+                self.ax.set_ylim(data_min - padding, y_upper + padding)
+
             self.canvas.draw_idle()
         self._schedule_chart_update()
 
@@ -461,6 +500,8 @@ class BLESensorApp:
         self.freq_label.config(text="采集频率：-- Hz")
 
     def _on_ble_disconnected(self, reason: str = ""):
+        self._finish_calibration_wizard()
+        self._set_calibration_status("向导：未开始")
         self.receive_button.config(text="扫描连接 (s)", bg="#4caf50", state=tk.NORMAL)
         self.record_button.config(state=tk.DISABLED)
         self.freq_label.config(text="采集频率：-- Hz")
@@ -488,30 +529,183 @@ class BLESensorApp:
         asyncio.run_coroutine_threadsafe(_write(), self.ble_loop)
         return True
 
-    def send_calibration(self):
-        if not messagebox.askyesno("确认校准", "确认按当前砝码重量发送校准参数吗？"):
+    def _send_calibration_from_weight(self, measured_weight, actual_weight, show_success=True):
+        if actual_weight == 0:
+            messagebox.showerror("输入错误", "标准砝码重量为0，无法计算校准因子")
+            return False
+        factor = measured_weight / actual_weight
+        factor_int = int(round(factor * 10000))
+        if factor_int < 1 or factor_int > 0xFFFFFFFF:
+            messagebox.showerror("输入错误", f"校准因子超出范围: {factor_int}")
+            return False
+        cmd = CMD_CALIB_HDR + struct.pack('>I', factor_int)
+        if self._send_cmd(cmd):
+            print(f"已发送校准因子: {factor:.4f} (整数={factor_int})")
+            if show_success:
+                messagebox.showinfo("校准", f"校准因子已发送: {factor:.4f}")
+            return True
+        return False
+
+    def start_calibration_wizard(self):
+        if self.calibration_wizard_running:
+            messagebox.showinfo("一键校准向导", "校准向导正在执行，请先完成当前流程。")
+            return
+        if not self.ble_client or not self.ble_client.is_connected:
+            messagebox.showwarning("未连接", "请先扫描连接设备后再开始校准向导。")
             return
         try:
             actual = float(self.calib_actual_entry.get())
-            if actual == 0:
-                messagebox.showerror("输入错误", "砝码重量不能为0")
+            if actual <= 0:
+                messagebox.showerror("输入错误", "请输入大于0的标准砝码重量。")
                 return
-            with self.data_lock:
-                current = self.latest_filtered_weight
-            if current is None:
-                messagebox.showerror("无数据", "当前无实时重量数据，请先连接设备并放上砝码")
-                return
-            factor = current / actual
-            factor_int = int(round(factor * 1000))
-            if factor_int < 1 or factor_int > 65535:
-                messagebox.showerror("输入错误", f"校准因子超出范围: {factor_int}")
-                return
-            cmd = CMD_CALIB_HDR + struct.pack('>H', factor_int)
-            if self._send_cmd(cmd):
-                print(f"已发送校准因子: {factor:.4f} (整数={factor_int})")
-                messagebox.showinfo("校准", f"校准因子已发送: {factor:.4f}")
         except ValueError:
-            messagebox.showerror("输入错误", "请输入有效的数字")
+            messagebox.showerror("输入错误", "请输入有效的标准砝码重量。")
+            return
+
+        if not messagebox.askyesno(
+            "一键校准向导",
+            "将执行以下步骤：\n"
+            "1. 保持平台空载并自动归零\n"
+            "2. 提示你放上标准砝码\n"
+            "3. 自动检测稳定重量\n"
+            "4. 自动发送校准参数\n\n"
+            "是否开始？"
+        ):
+            return
+
+        self.calibration_wizard_running = True
+        self._set_calibration_cancel_state(True)
+        self._calibration_target_weight = actual
+        self._calibration_target_text = self.calib_actual_entry.get().strip()
+        self._calibration_baseline_weight = None
+        self._calibration_has_confirmed_load = False
+        self._calibration_samples = []
+        self._calibration_stable_count = 0
+        self._set_calibration_status("向导：请保持平台空载，准备自动归零...")
+        self.root.after(200, self._calibration_step_zero)
+
+    def _set_calibration_status(self, text):
+        if hasattr(self, "calibration_status_label"):
+            self.calibration_status_label.config(text=text)
+
+    def _set_calibration_cancel_state(self, enabled):
+        if hasattr(self, "cancel_calibration_button"):
+            self.cancel_calibration_button.config(state=tk.NORMAL if enabled else tk.DISABLED)
+
+    def _cancel_calibration_timer(self):
+        if self._calibration_after_id:
+            self.root.after_cancel(self._calibration_after_id)
+            self._calibration_after_id = None
+
+    def _finish_calibration_wizard(self):
+        self._cancel_calibration_timer()
+        self.calibration_wizard_running = False
+        self._set_calibration_cancel_state(False)
+        self._calibration_samples = []
+        self._calibration_stable_count = 0
+        self._calibration_target_weight = None
+        self._calibration_target_text = ""
+        self._calibration_baseline_weight = None
+
+    def cancel_calibration_wizard(self):
+        if not self.calibration_wizard_running:
+            return
+        self._finish_calibration_wizard()
+        self._set_calibration_status("向导：已取消")
+        messagebox.showinfo("一键校准向导", "校准向导已取消。")
+
+    def _calibration_step_zero(self):
+        if not self.calibration_wizard_running:
+            return
+        with self.data_lock:
+            current = self.latest_filtered_weight
+        if current is None:
+            self._finish_calibration_wizard()
+            self._set_calibration_status("向导：未开始")
+            messagebox.showwarning("一键校准向导", "当前没有实时重量数据，无法自动归零。")
+            return
+
+        self._calibration_baseline_weight = current
+        self.cancel_zero()
+        self.do_zero()
+        self._set_calibration_status("向导：已完成空载归零，请放上标准砝码后点击下一步...")
+
+        if not messagebox.askokcancel(
+            "一键校准向导",
+            f"空载归零已完成。\n\n请将 {self._calibration_target_text} kg 标准砝码放到平台上，并保持稳定。\n确认放好后点击“确定”进入下一步；点击“取消”终止向导。"
+        ):
+            self._finish_calibration_wizard()
+            self._set_calibration_status("向导：已取消")
+            return
+
+        self._calibration_has_confirmed_load = True
+        self._calibration_samples = []
+        self._calibration_stable_count = 0
+        self._set_calibration_status("向导：正在读取稳定测量值...")
+        self._calibration_after_id = self.root.after(300, self._calibration_step_wait_stable)
+
+    def _calibration_step_wait_stable(self):
+        if not self.calibration_wizard_running:
+            return
+
+        with self.data_lock:
+            current = self.latest_filtered_weight
+
+        if current is None:
+            self._set_calibration_status("向导：等待实时重量数据...")
+            self._calibration_after_id = self.root.after(300, self._calibration_step_wait_stable)
+            return
+
+        if not self._calibration_has_confirmed_load:
+            self._set_calibration_status("向导：等待确认已放好标准砝码...")
+            self._calibration_after_id = self.root.after(300, self._calibration_step_wait_stable)
+            return
+
+        baseline = self._calibration_baseline_weight
+        if baseline is None:
+            baseline = 0.0
+
+        self._calibration_samples.append(current)
+        if len(self._calibration_samples) > 8:
+            self._calibration_samples.pop(0)
+
+        stable_value = None
+        if len(self._calibration_samples) >= 5:
+            window = self._calibration_samples[-5:]
+            window_range = max(window) - min(window)
+            window_avg = sum(window) / len(window)
+            tolerance = max(0.2, abs(window_avg) * 0.02)
+            if window_range <= tolerance:
+                self._calibration_stable_count += 1
+                stable_value = round(window_avg, 2)
+            else:
+                self._calibration_stable_count = 0
+
+        measured_value = current - baseline
+        if stable_value is not None:
+            stable_measured_value = stable_value - baseline
+            self._set_calibration_status(
+                f"向导：读取中，稳定测量值 {stable_measured_value:.2f} kg ({self._calibration_stable_count}/3)"
+            )
+        else:
+            self._set_calibration_status(f"向导：读取中，当前测量值 {measured_value:.2f} kg")
+
+        if stable_value is not None and self._calibration_stable_count >= 3:
+            actual = self._calibration_target_weight
+            stable_measured_value = stable_value - baseline
+            success = self._send_calibration_from_weight(stable_measured_value, actual, show_success=False)
+            self._finish_calibration_wizard()
+            if success:
+                self._set_calibration_status(f"向导：校准完成，稳定测量值 {stable_measured_value:.2f} kg")
+                messagebox.showinfo(
+                    "一键校准向导",
+                    f"已完成自动校准。\n稳定测量值：{stable_measured_value:.2f} kg\n标准砝码：{actual:.3f} kg"
+                )
+            else:
+                self._set_calibration_status("向导：发送校准失败")
+            return
+
+        self._calibration_after_id = self.root.after(300, self._calibration_step_wait_stable)
 
     def send_restore_default(self):
         if not messagebox.askyesno("确认恢复默认", "确认恢复默认比例系数吗？"):
@@ -773,6 +967,7 @@ class BLESensorApp:
 
     # ═══════════════════════════════════════════════════════════ 关闭
     def _on_close(self):
+        self._finish_calibration_wizard()
         self.running = False
         self._stop_ble()
         self.root.after(300, self.root.destroy)
