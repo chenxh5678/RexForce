@@ -32,7 +32,7 @@
 
 ### 2.3 测力传感器+秤脚
 
-[【淘宝】HY928D人体称重传感器](https://e.tb.cn/h.iOpZGWDpEYEqtUk?tk=EpAu54ZpoQS) 
+[【淘宝】测力传感器](https://e.tb.cn/h.iOpZGWDpEYEqtUk?tk=EpAu54ZpoQS) 
 
 ![传感器1](pic/传感器.png) ![传感器2](pic/秤脚.png)
 
