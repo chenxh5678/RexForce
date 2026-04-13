@@ -26,7 +26,6 @@ MODBUS_FUNC_MIXED = 0x05
 
 # ── 指令（与 win.py 一致） ────────────────────────────────────────────────
 CMD_RESTORE    = bytes([0x54, 0xF8])
-CMD_SAVE_DEF   = bytes([0x54, 0xCC])
 CMD_TEMP_REQ   = bytes([0x54, 0xDD])
 CMD_DISCONNECT = bytes([0x54, 0xDE])
 CMD_CALIB_HDR  = bytes([0x54, 0xAA])
@@ -241,8 +240,6 @@ class BLESensorApp:
 
         # 比例系数
         self._section(right, "比例系数")
-        tk.Button(right, text="保存当前为默认值",
-                  command=self.send_save_default, **plain_btn).pack(**pad)
         tk.Button(right, text="恢复默认值",
                   command=self.send_restore_default, **plain_btn).pack(**pad)
 
@@ -285,7 +282,7 @@ class BLESensorApp:
     def _schedule_chart_update(self):
         if self._chart_update_id:
             self.root.after_cancel(self._chart_update_id)
-        self._chart_update_id = self.root.after(100, self._update_chart)
+        self._chart_update_id = self.root.after(200, self._update_chart)
 
     def _update_chart(self):
         self._chart_update_id = None
@@ -713,13 +710,6 @@ class BLESensorApp:
         if self._send_cmd(CMD_RESTORE):
             print("已发送恢复默认值指令")
             messagebox.showinfo("恢复默认", "已发送恢复默认值指令")
-
-    def send_save_default(self):
-        if not messagebox.askyesno("确认保存默认", "确认将当前比例系数保存为默认值吗？"):
-            return
-        if self._send_cmd(CMD_SAVE_DEF):
-            print("已发送保存默认值指令")
-            messagebox.showinfo("保存默认", "已发送保存当前为默认值指令")
 
     def request_temperature(self):
         if self._send_cmd(CMD_TEMP_REQ):
