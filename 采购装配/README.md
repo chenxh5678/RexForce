@@ -36,11 +36,11 @@
 
 ### 2.3 测力传感器+秤脚
 
-[【淘宝】测力传感器](https://e.tb.cn/h.iOpZGWDpEYEqtUk?tk=EpAu54ZpoQS) 
+[【淘宝】测力传感器](https://e.tb.cn/h.iJ1PV9ClVYTvE5E?tk=cuvu5ScJeLK) 
 
 ![传感器1](pic/传感器.png) ![传感器2](pic/秤脚.png)
 
->单个传感器200kg量程，四个800kg。如果200kg缺货，用100kg的也可以，但要跟客服定制30cm线长。
+>单个传感器200kg量程，四个800kg。如果200kg缺货，用100kg的也可以，但要跟客服确认是否至少25cm线长。
 
 ### 2.4 外壳3D打印1套
 
@@ -64,7 +64,10 @@
 
 [【淘宝】KF2EDG PCB接线端子](https://e.tb.cn/h.imfXjrMu2owpwlC?tk=r0nq540qWOY) 
 
-![端子1](pic/接线端子.png) ![端子2](pic/接线端子2.png)
+![端子1](pic/接线端子.png)
+<p align="center">
+  <img src="pic/接线端子2.png" alt="RexForce 主板示意图" width="300" />
+</p>
 
 ### 2.8 双头Type-C数据线1根
 
@@ -79,8 +82,13 @@
 ## 3 装配
 ### 3.1 传感器剥线
 用鸭嘴剥线钳或小刀，将所有测力传感器的四根线末端剥出约1cm长的金属线，然后将相同颜色的金属线部分拧到一起，最后按红、黑、白、绿顺序插到接线端子里，用螺丝刀拧紧固定好。
-![并线](pic/并线.jpg)
-![接端子](pic/端子.jpg)
+<p align="center">
+  <img src="pic/并线.jpg" alt="RexForce 主板示意图" width="500" />
+</p>
+
+<p align="center">
+  <img src="pic/端子.jpg" alt="RexForce 主板示意图" width="500" />
+</p>
 
 ### 3.2 安装
 如图插电池，插接线端子，装外壳。秤脚拧到传感器上，注意加上圆环垫片。
