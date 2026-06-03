@@ -39,33 +39,41 @@
 
 ![锂电池](pic/电池.png)
 
-### 2.3 测力传感器+秤脚
+### 2.3 测力传感器
 
 [【淘宝】测力传感器](https://e.tb.cn/h.iJ1PV9ClVYTvE5E?tk=cuvu5ScJeLK) 
 
-![传感器1](pic/传感器.png) ![传感器2](pic/秤脚.png)
+![传感器1](pic/传感器.png) 
 
 >单个传感器200kg量程，四个800kg。如果200kg缺货，用100kg的也可以，但要跟客服确认是否至少25cm线长。
 
-### 2.4 外壳3D打印1套
+### 2.4 秤脚
+
+[【淘宝】带胶垫 28-M5×9 10套](https://e.tb.cn/h.R7ve028RES5DzhJ?tk=9AIrgZ0T8Fr) 
+
+<p align="center">
+  <img src="pic/秤脚.png" alt="RexForce 主板示意图" width="300" />
+</p>
+
+### 2.5 外壳3D打印1套
 
 [【淘宝】3D打印服务](https://e.tb.cn/h.inaKN3jBCLKEbqG?tk=2rhw54ZtYiK) 
 
 >联系淘宝客服，将 `.3mf` 文件发给客服，打印即可。可以询问客服自己选颜色和材料。
 
-### 2.5 钢板定制1块
+### 2.6 钢板定制1块
 
 [【淘宝】不锈钢板激光切割](https://e.tb.cn/h.inasCLNXotgxqqC?tk=UrEN54ZE8SY) 
 
 ![钢板](pic/钢板.png)
 
-### 2.6 M3螺丝2~20个
+### 2.7 M3螺丝2~20个
 
 [【淘宝】M3黑色不锈钢螺丝](https://e.tb.cn/h.iOpqxURZDhgB21X?tk=pOpC540gd3P) 
 
 ![螺丝](pic/螺丝.png)
 
-### 2.7 接线端子1个
+### 2.8 接线端子1个
 
 [【淘宝】KF2EDG PCB接线端子](https://e.tb.cn/h.imfXjrMu2owpwlC?tk=r0nq540qWOY) 
 
@@ -74,7 +82,7 @@
   <img src="pic/接线端子2.png" alt="RexForce 主板示意图" width="300" />
 </p>
 
-### 2.8 双头Type-C数据线1根
+### 2.9 双头Type-C数据线1根
 
 [【淘宝】双Type-C数据线](https://e.tb.cn/h.iOpiUHw1WF56L72?tk=ZHzF54ZzYl2) 
 
@@ -82,7 +90,7 @@
 
 > 用来连接两个测力台，只有一个测力台可不用数据线。
 
-### 2.9 屏蔽胶带铝箔胶带
+### 2.10 屏蔽胶带铝箔胶带
 
 [【淘宝】宽50MM*20米足长](https://e.tb.cn/h.RVo3PtKf2AzqXts?tk=mpx05vANGBk) 
 
@@ -102,7 +110,7 @@
 </p>
 
 ### 3.2 安装
-如图插电池，插接线端子，装外壳。秤脚加上圆环垫片和螺母扣再拧到传感器上。
+如图插电池，插接线端子，装外壳。秤脚加上螺母扣拧到传感器上。
 ![装壳](pic/装壳.jpg)
 ![秤脚](pic/秤脚安装.jpg)
 
