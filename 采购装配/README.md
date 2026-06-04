@@ -59,7 +59,7 @@
 
 [【淘宝】3D打印服务](https://e.tb.cn/h.inaKN3jBCLKEbqG?tk=2rhw54ZtYiK) 
 
->联系淘宝客服，将 `.3mf` 文件发给客服，打印即可。可以询问客服自己选颜色和材料。
+>联系淘宝客服，将 `3D打印文件.3mf` 文件发给客服，打印即可。可以询问客服自己选颜色和材料。
 
 ### 2.6 钢板定制1块
 
@@ -78,9 +78,6 @@
 [【淘宝】KF2EDG PCB接线端子](https://e.tb.cn/h.imfXjrMu2owpwlC?tk=r0nq540qWOY) 
 
 ![端子1](pic/接线端子.png)
-<p align="center">
-  <img src="pic/接线端子2.png" alt="RexForce 主板示意图" width="300" />
-</p>
 
 ### 2.9 双头Type-C数据线1根
 
