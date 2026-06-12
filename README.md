@@ -48,7 +48,7 @@ RexForce 测力主板是一款用于测力采集与无线传输的控制主板�
 | 传感器接口 | 插拔式 3.81 mm 接线端子 |
 
 <p align="center">
-  <img src="./PCB.png" alt="RexForce 主板示意图" width="200" />
+  <img src="pic/PCB.png" alt="RexForce 主板示意图" width="200" />
 </p>
 
 ---
@@ -62,7 +62,7 @@ RexForce 测力主板是一款用于测力采集与无线传输的控制主板�
 半桥传感器应先通过桥路补偿或加秤板转换为标准四线桥式输出后，再接入主板。
 
 <p align="center">
-  <img src="./类型.png" alt="RexForce 主板示意图" width="500" />
+  <img src="pic/类型.png" alt="RexForce 主板示意图" width="500" />
 </p>
 
 ### 2.2 接线端子定义
@@ -90,11 +90,11 @@ RexForce 测力主板是一款用于测力采集与无线传输的控制主板�
 - 所有 `S-` 并接至主板 `S-`
 
 <p align="center">
-  <img src="./并联.png" alt="RexForce 主板示意图" width="500" />
+  <img src="pic/并联.png" alt="RexForce 主板示意图" width="500" />
 </p>
 
 <p align="center">
-  <img src="./PCB_连接.png" alt="RexForce 主板示意图" width="500" />
+  <img src="pic/PCB_连接.png" alt="RexForce 主板示意图" width="500" />
 </p>
 
 ---
@@ -500,7 +500,7 @@ await client.write_gatt_char(RX_UUID, cmd)
 ## 10. 主板尺寸图
 
 <p align="center">
-  <img src="./PCB_工程图.png" alt="RexForce 主板尺寸图" width="700" />
+  <img src="pic/PCB_工程图.png" alt="RexForce 主板尺寸图" width="700" />
 </p>
 
 ---
