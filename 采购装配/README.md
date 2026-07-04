@@ -1,4 +1,4 @@
-# 基于RexForce主板的测力台装配说明
+# 基于RexForce主板的测力台零件采购与组装说明
 
 [点击这里查看RexForce主板开发说明文档](../README.md)
 
