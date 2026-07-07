@@ -93,10 +93,6 @@ RexForce 测力主板是一款用于测力采集与无线传输的控制主板�
   <img src="pic/并联.png" alt="RexForce 主板示意图" width="500" />
 </p>
 
-<p align="center">
-  <img src="pic/PCB_连接.png" alt="RexForce 主板示意图" width="500" />
-</p>
-
 ---
 
 ## 3. 电池说明
