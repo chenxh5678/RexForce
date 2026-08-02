@@ -213,9 +213,17 @@
         <div class="note" style="margin-top:4px">去除 1000 Hz 高频噪声；fc 越高保留细节越多。</div>
       </div>
 
-      <!-- 三点滑动清洗：常开，无开关无设置（移植自 win.py _push_point，参数固定 30/5/修零） -->
-      <div class="note" style="align-self:center">
-        三点滑动清洗 <b>常开</b>（固定参数：检测 30 / 保留 5 / 修复孤立 0），无需设置。
+      <!-- Hampel 实时尖峰过滤（窗口缓存 radius 点后输出中间点，延迟 ~10ms，人眼无感） -->
+      <div style="min-width:260px; flex:1">
+        <label class="row" style="gap:6px; margin:0 0 6px; cursor:pointer; font-weight:600">
+          <input type="checkbox" id="hpOn" checked style="width:auto"> Hampel 尖峰过滤（中位数替换）
+        </label>
+        <div class="field-row">
+          <div><label>窗口半径</label><input type="number" id="hpRadius" value="10" min="3" max="50" step="1"></div>
+          <div><label>σ 倍数</label><input type="number" id="hpSigma" value="6.0" min="1" max="20" step="0.5"></div>
+          <div><label>最小幅度 (kg)</label><input type="number" id="hpMinDev" value="2.0" min="0" step="1"></div>
+        </div>
+        <div class="note" style="margin-top:4px">MAD 自适应阈值；±radius 窗口取中位数替换离群尖峰。</div>
       </div>
 
     </div>
@@ -288,10 +296,10 @@ let filtFc = 20, filtOrder = 4;
 let filtMain = null, filtSub = null;
 const FS = 1000;   // 设备采样率 Hz
 
-// 三点滑动清洗（移植自 win.py _push_point）—— 常开，参数固定，无开关无设置
-let tpOn = true;   // 始终开启
-const tpDetect = 30, tpKeep = 5, tpZeroRepair = true, tpZeroMin = 1;
-let tpMain = null, tpSub = null;
+// Hampel 实时尖峰过滤（窗口缓存后输出，延迟 ~10ms）
+let hpOn = true;
+let hpRadius = 10, hpSigma = 6.0, hpMinDev = 2.0;
+let hpMain = null, hpSub = null;
 
 // 归零（去皮）：记录当前读数偏移，从显示/统计/录制值中扣除
 let zeroOn = false, zeroMain = 0, zeroSub = 0;
@@ -317,6 +325,58 @@ function checkSupport(){
   return true;
 }
 
+// 连接状态机：manualDisconnect=用户主动断开；connecting=正在建连（隔离内部断连事件）；autoReconnectTries=自动重连计数
+let manualDisconnect = false;
+let connecting = false;
+let autoReconnectTries = 0;
+const MAX_AUTO_RECONNECT = 5;
+
+// 建立/复用 GATT 连接并获取服务与特征（带重试，解决 "GATT Server is disconnected" 偶发假连接）
+async function connectServices(){
+  connecting = true;
+  let result = false;
+  for (let attempt=1; attempt<=3; attempt++){
+    try {
+      if (!device.gatt.connected){
+        log('连接 GATT…（第 '+attempt+' 次）','i');
+        server = await device.gatt.connect();
+      } else {
+        server = device.gatt;
+      }
+      service = await server.getPrimaryService(SERVICE_UUID);
+      txChar  = await service.getCharacteristic(TX_UUID);
+      rxChar  = await service.getCharacteristic(RX_UUID);
+      await txChar.startNotifications();
+      txChar.addEventListener('characteristicvaluechanged', onNotify);
+      result = true;
+      break;
+    } catch(e){
+      log('GATT 建立失败（第 '+attempt+' 次）：' + e.message, 'e');
+      try { await device.gatt.disconnect(); } catch(_){}
+      if (attempt < 3){ await new Promise(r=>setTimeout(r, 500)); }
+    }
+  }
+  connecting = false;
+  return result;
+}
+
+// 连接成功后的 UI / 状态初始化（connect 与自动重连共用）
+function finishConnect(){
+  connected = true;
+  curMode='unknown'; globalSample=0; rxBuffer=new Uint8Array(0);
+  lastTs=-1; dropCount=0;
+  ringHead=0; ringFilled=0;
+  session = { peakP:-Infinity, peakN:Infinity, count:0, startMs:performance.now(), lastMain:0, lastSub:0, lastComb:0 };
+  $('devName').textContent = device.name || '未知';
+  setState('on','已连接');
+  if (filterOn){ ensureFilter(); resetFilter(); }   // 连接时重建并清零滤波状态
+  if (hpOn){ ensureHP(); resetHP(); }                 // Hampel 尖峰过滤，连接时重建并清零
+  $('btnConnect').disabled = true;
+  $('btnDisconnect').disabled = false;
+  ['btnCal','btnRestDef','btnReadTemp','btnRec','btnZero'].forEach(id=>$(id).disabled=false);
+  log('已连接：' + (device.name||''),'ok');
+}
+
 async function connect(){
   if (!checkSupport()) return;
   try {
@@ -327,37 +387,22 @@ async function connect(){
     });
   } catch(e){ log('选择设备失败：' + e.message,'e'); return; }
 
+  manualDisconnect = false;
+  autoReconnectTries = 0;
   device.addEventListener('gattserverdisconnected', onDisconnected);
-  try {
-    log('连接 GATT…','i');
-    server = await device.gatt.connect();
-    service = await server.getPrimaryService(SERVICE_UUID);
-    txChar = await service.getCharacteristic(TX_UUID);
-    rxChar = await service.getCharacteristic(RX_UUID);
-    await txChar.startNotifications();
-    txChar.addEventListener('characteristicvaluechanged', onNotify);
-
-    connected = true;
-    curMode='unknown'; globalSample=0; rxBuffer=new Uint8Array(0);
-    lastTs=-1; dropCount=0;
-    ringHead=0; ringFilled=0;
-    session = { peakP:-Infinity, peakN:Infinity, count:0, startMs:performance.now(), lastMain:0, lastSub:0, lastComb:0 };
-
-    $('devName').textContent = device.name || '未知';
-    setState('on','已连接');
-    if (filterOn){ ensureFilter(); resetFilter(); }   // 连接时重建并清零滤波状态
-    ensureTP(); resetTP();                             // 三点清洗常开，连接时重建并清零
-    $('btnConnect').disabled = true;
-    $('btnDisconnect').disabled = false;
-    ['btnCal','btnRestDef','btnReadTemp','btnRec','btnZero'].forEach(id=>$(id).disabled=false);
-    log('已连接：' + (device.name||''),'ok');
-  } catch(e){
-    log('连接失败：' + e.message,'e');
-    try{ await server?.disconnect?.(); }catch(_){}
+  const ok = await connectServices();
+  if (!ok){
+    log('连接失败：无法建立 GATT 连接。请确认设备已开机、在范围内且未连接其他设备，然后重试。','e');
+    try { await device.gatt.disconnect(); } catch(_){}
+    return;
   }
+  finishConnect();
 }
 
 function onDisconnected(){
+  // 正在建连过程中的内部断连事件（connectServices 的重试清理）忽略，交给重试逻辑处理
+  if (connecting) return;
+  if (rxChar) try{ rxChar.removeEventListener('characteristicvaluechanged', onNotify); }catch(_){}
   connected=false;
   zeroOn=false; zeroMain=0; zeroSub=0; $('btnZero').textContent='归零（去皮）';
   setState('off','已断开');
@@ -365,10 +410,29 @@ function onDisconnected(){
   $('btnDisconnect').disabled=true;
   ['btnCal','btnRestDef','btnReadTemp','btnRec','btnZero'].forEach(id=>$(id).disabled=true);
   if (recording) stopRec();
-  log('设备已断开连接。','e');
+  if (!manualDisconnect && device){
+    if (autoReconnectTries < MAX_AUTO_RECONNECT){
+      autoReconnectTries++;
+      log('连接意外断开，2 秒后自动重连（第 '+autoReconnectTries+'/'+MAX_AUTO_RECONNECT+' 次）…','i');
+      setTimeout(autoReconnect, 2000);
+    } else {
+      log('连接已断开，多次自动重连失败，请手动重新连接。','e');
+    }
+  } else {
+    log('设备已断开连接。','e');
+  }
+}
+
+async function autoReconnect(){
+  if (!device || manualDisconnect) return;
+  log('自动重连中…','i');
+  const ok = await connectServices();
+  if (ok) finishConnect();
+  // 若失败，gattserverdisconnected 会再次触发 onDisconnected 并继续重连计数
 }
 
 function disconnect(){
+  manualDisconnect = true;
   if (rxChar) try{ rxChar.removeEventListener('characteristicvaluechanged', onNotify); }catch(_){}
   if (device && device.gatt && device.gatt.connected){ try{ device.gatt.disconnect(); }catch(_){} }
 }
@@ -504,64 +568,69 @@ function ensureFilter(){
 }
 function resetFilter(){ if (filtMain){ filtMain.reset(); filtSub.reset(); } }
 
-// ===================== 三点滑动窗口数据清洗 =====================
-// 移植自 win.py _push_point：第一层 |中点-上一处理值|>DETECT 触发异常，
-// 第二层 |插补值-中点|>KEEP 时用插补值替换，否则保留原值；可修复孤立 0。
-class ThreePointCleaner {
-  constructor(thresholdDetect = 30.0, thresholdKeep = 5.0, enableZeroRepair = true, zeroNormalMinAbs = 1) {
-    this.THRESHOLD_DETECT = thresholdDetect;
-    this.THRESHOLD_KEEP   = thresholdKeep;
-    this.enableZeroRepair = enableZeroRepair;
-    this.zeroNormalMinAbs = zeroNormalMinAbs;
-    this._rawBuf = [];   // 原始值缓冲（最多保留3个）
-    this._resBuf = [];   // 处理值缓冲（最多保留2个）
+// ===================== Hampel 实时尖峰过滤 =====================
+// 用环形窗口缓存 radius 个点后，对中间点做中位数 + MAD 离群检测；
+// 尖峰用窗口中位数替换。延迟 = radius / 1000 秒（radius=10 → 10ms），人眼无感。
+class HampelFilter {
+  constructor(radius = 10, sigma = 6.0, minDeviation = 2.0) {
+    this.radius = radius;
+    this.sigma = sigma;
+    this.minDeviation = minDeviation;
+    this._buf = [];   // 环形缓冲（保持 windowSize 个点）
+    this._heated = false; // 是否已预热满窗
   }
+
+  get windowSize() { return this.radius * 2 + 1; }
+
   filter(value) {
-    this._rawBuf.push(value);
-    let cleaned;
-    if (this._rawBuf.length < 3) {
-      cleaned = value;
-      this._resBuf.push(cleaned);
-    } else {
-      const bPrev = this._rawBuf[this._rawBuf.length - 3];
-      let bMid    = this._rawBuf[this._rawBuf.length - 2];
-      const bCur  = this._rawBuf[this._rawBuf.length - 1];
-      if (this.enableZeroRepair && bMid === 0 && Math.abs(bPrev) > this.zeroNormalMinAbs && Math.abs(bCur) > this.zeroNormalMinAbs) {
-        bMid = (bPrev + bCur) / 2;
-      }
-      const fPrev = this._resBuf.length >= 2
-        ? this._resBuf[this._resBuf.length - 2]
-        : this._resBuf[this._resBuf.length - 1];
-      const interp = (fPrev + bCur) / 2.0;
-      if (Math.abs(bMid - fPrev) > this.THRESHOLD_DETECT &&
-          Math.abs(interp - bMid) > this.THRESHOLD_KEEP) {
-        cleaned = interp;
-      } else {
-        cleaned = bMid;
-      }
-      this._resBuf.push(cleaned);
-      if (this._resBuf.length > 2) this._resBuf.shift();
-      if (this._rawBuf.length > 3) this._rawBuf.shift();
+    this._buf.push(value);
+    // 前 windowSize 个点直接输出原始值，同时累积缓冲
+    if (this._buf.length < this.windowSize) {
+      return value;
     }
+    this._heated = true;
+
+    const midIdx = this.radius;
+    const midVal = this._buf[midIdx];
+
+    // 计算窗口的中位数
+    const sorted = [...this._buf].sort((a, b) => a - b);
+    const median = sorted[this.radius];  // 排序后中间位置的元素
+
+    // 计算 MAD（Median Absolute Deviation）
+    const absDevs = this._buf.map(v => Math.abs(v - median)).sort((a, b) => a - b);
+    const mad = absDevs[this.radius];
+
+    // 自适应阈值：max(最小幅度, sigma × 1.4826 × MAD)
+    const threshold = Math.max(this.minDeviation, this.sigma * 1.4826 * mad);
+
+    const cleaned = Math.abs(midVal - median) > threshold ? median : midVal;
+
+    // 丢掉最老的点，维持窗口大小
+    this._buf.shift();
+
     return cleaned;
   }
-  reset() { this._rawBuf = []; this._resBuf = []; }
+
+  reset() { this._buf = []; this._heated = false; }
 }
-function ensureTP(){
-  // 三点清洗常开，参数固定（30/5/修零），仅首次创建两个通道实例
-  if (!tpMain){
-    tpMain = new ThreePointCleaner(tpDetect, tpKeep, tpZeroRepair, tpZeroMin);
-    tpSub  = new ThreePointCleaner(tpDetect, tpKeep, tpZeroRepair, tpZeroMin);
+function ensureHP(){
+  if (!hpOn) return;
+  if (!hpMain || hpMain.radius!==hpRadius || hpMain.sigma!==hpSigma || hpMain.minDeviation!==hpMinDev){
+    hpMain = new HampelFilter(hpRadius, hpSigma, hpMinDev);
+    hpSub  = new HampelFilter(hpRadius, hpSigma, hpMinDev);
   }
 }
-function resetTP(){ if (tpMain){ tpMain.reset(); tpSub.reset(); } }
+function resetHP(){ if (hpMain){ hpMain.reset(); hpSub.reset(); } }
 
 function pushSample(main, sub, comb, isDual){
-  // 数据清洗管线：原始 → 三点滑动清洗（去尖峰/修零，常开） → 巴特沃斯低通（平滑）
+  // 数据清洗管线：原始 → Hampel 尖峰过滤（中位数替换） → 巴特沃斯低通（平滑）
   let dMain=main, dSub=sub;
-  ensureTP();
-  dMain = tpMain.filter(dMain);
-  dSub  = tpSub.filter(dSub);
+  if (hpOn){
+    ensureHP();
+    dMain = hpMain.filter(dMain);
+    dSub  = hpSub.filter(dSub);
+  }
   if (filterOn){
     ensureFilter();
     dMain = filtMain.process(dMain);
@@ -781,15 +850,14 @@ $('btnClearLog').onclick = ()=> logEl.innerHTML='';
 
 // 滤波控制
 function updateFiltStatus(){
-  if (!filterOn){ $('filtStatus').textContent = '巴特沃斯 关 · 三点清洗 常开 (30/5 修零)'; return; }
   const parts=[];
-  parts.push('巴特沃斯 开 · '+filtOrder+' 阶 · '+filtFc+' Hz');
-  parts.push('三点清洗 常开 ('+tpDetect+'/'+tpKeep+(tpZeroRepair?' 修零':'')+')');
+  parts.push(filterOn ? ('巴特沃斯 开 · '+filtOrder+' 阶 · '+filtFc+' Hz') : '巴特沃斯 关');
+  parts.push(hpOn ? ('Hampel 开 (r='+hpRadius+' σ='+hpSigma.toFixed(1)+' min='+hpMinDev.toFixed(1)+'kg)') : 'Hampel 关');
   $('filtStatus').textContent = parts.join(' · ');
 }
 function rebuildFilters(){
   if (filterOn){ ensureFilter(); resetFilter(); }
-  ensureTP(); resetTP();
+  if (hpOn){ ensureHP(); resetHP(); }
 }
 $('filtOn').onchange = ()=>{
   filterOn = $('filtOn').checked; rebuildFilters(); updateFiltStatus();
@@ -806,6 +874,30 @@ $('filtOrder').onchange = ()=>{
   if (filterOn){ ensureFilter(); resetFilter(); } updateFiltStatus();
   log('巴特沃斯阶数 → '+filtOrder+' 阶','i');
 };
+
+// Hampel 尖峰过滤控制
+$('hpOn').onchange = ()=>{
+  hpOn = $('hpOn').checked; rebuildFilters(); updateFiltStatus();
+  log('Hampel 尖峰过滤 '+(hpOn?'开':'关'),'i');
+};
+$('hpRadius').onchange = ()=>{
+  hpRadius = Math.max(3, Math.min(50, parseInt($('hpRadius').value)||10));
+  $('hpRadius').value = hpRadius;
+  if (hpOn){ ensureHP(); resetHP(); } updateFiltStatus();
+  log('Hampel 窗口半径 → '+hpRadius,'i');
+};
+$('hpSigma').onchange = ()=>{
+  hpSigma = Math.max(1, Math.min(20, parseFloat($('hpSigma').value)||6));
+  $('hpSigma').value = hpSigma;
+  if (hpOn){ ensureHP(); resetHP(); } updateFiltStatus();
+  log('Hampel σ → '+hpSigma.toFixed(1),'i');
+};
+$('hpMinDev').onchange = ()=>{
+  hpMinDev = Math.max(0, parseFloat($('hpMinDev').value)||2);
+  $('hpMinDev').value = hpMinDev;
+  if (hpOn){ ensureHP(); resetHP(); } updateFiltStatus();
+  log('Hampel 最小幅度 → '+hpMinDev.toFixed(1)+' kg','i');
+};;
 document.querySelectorAll('#chartMode button').forEach(b=>{
   b.onclick = ()=>{
     document.querySelectorAll('#chartMode button').forEach(x=>x.classList.remove('active'));
