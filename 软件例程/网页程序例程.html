@@ -1,0 +1,826 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>RexForce 测力台 · Web BLE</title>
+<style>
+  :root {
+    --bg: #f4f6f9;
+    --card: #ffffff;
+    --line: #e3e8ef;
+    --text: #1f2733;
+    --muted: #6b7686;
+    --primary: #2563eb;
+    --primary-d: #1d4ed8;
+    --green: #16a34a;
+    --red: #dc2626;
+    --amber: #d97706;
+    --soft: #eef3ff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.5; padding: 16px;
+  }
+  h1 { font-size: 20px; margin: 0 0 2px; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 16px; }
+  .grid { display: grid; grid-template-columns: repeat(12, 1fr); gap: 14px; max-width: 1180px; margin: 0 auto; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .col-12 { grid-column: span 12; } .col-8 { grid-column: span 8; } .col-6 { grid-column: span 6; }
+  .col-4 { grid-column: span 4; } .col-5 { grid-column: span 5; } .col-7 { grid-column: span 7; }
+  @media (max-width: 900px) { .col-8,.col-6,.col-4,.col-5,.col-7 { grid-column: span 12; } }
+
+  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  button {
+    font: inherit; border: 1px solid var(--line); background: #fff; color: var(--text);
+    padding: 9px 14px; border-radius: 9px; cursor: pointer; transition: .15s; font-weight: 600;
+  }
+  button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+  button:disabled { opacity: .45; cursor: not-allowed; }
+  button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+  button.primary:hover:not(:disabled) { background: var(--primary-d); color: #fff; }
+  button.warn { background: #fff; border-color: var(--red); color: var(--red); }
+  button.warn:hover:not(:disabled) { background: var(--red); color: #fff; }
+  button.tiny { padding: 5px 10px; font-size: 12px; font-weight: 600; }
+
+  .badge { display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 700; }
+  .badge.off { background: #f1f3f6; color: var(--muted); }
+  .badge.on  { background: #e7f7ec; color: var(--green); }
+  .badge.scan{ background: #fff3e0; color: var(--amber); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+
+  .big { font-size: 46px; font-weight: 800; letter-spacing: -1px; font-variant-numeric: tabular-nums; }
+  .unit { font-size: 18px; color: var(--muted); font-weight: 600; margin-left: 4px; }
+  .neg { color: var(--primary); } .pos { color: var(--text); }
+
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 12px; }
+  .stat { background: var(--soft); border-radius: 9px; padding: 10px 12px; }
+  .stat .k { font-size: 12px; color: var(--muted); }
+  .stat .v { font-size: 19px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .stat .v small { font-size: 12px; color: var(--muted); font-weight: 600; }
+
+  canvas { width: 100%; height: 260px; display: block; }
+  .chart-wrap { position: relative; }
+
+  label { font-size: 12px; color: var(--muted); display: block; margin: 8px 0 3px; font-weight: 600; }
+  input[type=number], input[type=text] {
+    width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font: inherit; color: var(--text);
+  }
+  input:focus { outline: none; border-color: var(--primary); }
+  .field-row { display: flex; gap: 8px; }
+  .field-row > div { flex: 1; }
+
+  .log { background: #0f172a; color: #cbd5e1; border-radius: 9px; padding: 12px; height: 180px; overflow:auto; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12px; line-height: 1.5; }
+  .log .t { color: #64748b; }
+  .log .e { color: #f87171; } .log .ok { color: #4ade80; } .log .i { color: #93c5fd; }
+
+  details { margin-top: 6px; } summary { cursor: pointer; color: var(--primary); font-weight: 600; font-size: 13px; }
+  .note { font-size: 12px; color: var(--muted); }
+  .kv { display:flex; justify-content:space-between; font-size:13px; padding:3px 0; border-bottom:1px dashed var(--line); }
+  .kv:last-child{border-bottom:none;}
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .seg button { border:none; border-radius:0; background:#fff; padding:6px 12px; }
+  .seg button.active { background: var(--primary); color:#fff; }
+  code { background:#eef2f7; padding:1px 5px; border-radius:4px; font-size:12px; }
+  .temp { font-variant-numeric: tabular-nums; font-weight:700; }
+</style>
+</head>
+<body>
+<div class="grid">
+
+  <div class="col-12 card">
+    <div class="row" style="justify-content:space-between">
+      <div>
+        <h1>RexForce 测力台 · Web BLE 客户端</h1>
+        <div class="sub">纯网页实现 · Web Bluetooth API · 支持 Chrome / Edge / Android（⚠️ iOS / iPadOS 所有浏览器均不支持，见下方说明）</div>
+      </div>
+      <div class="row">
+        <span id="stateBadge" class="badge off"><span class="dot"></span><span id="stateText">未连接</span></span>
+        <button id="btnConnect" class="primary">连接设备</button>
+        <button id="btnDisconnect" class="warn" disabled>断开</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:10px">
+      <span class="note">设备名称：<code id="devName">—</code></span>
+      <span class="note">模式：<code id="modeText">未知</code></span>
+      <span class="note">采样率：1000 Hz</span>
+      <span class="note">温度：<span id="tempVal" class="temp">—</span></span>
+    </div>
+  </div>
+
+  <!-- 主显示 -->
+  <div class="col-7 card">
+    <div class="row" style="justify-content:space-between">
+      <div>
+        <div class="note">当前重量</div>
+        <div><span id="bigVal" class="big pos">0.0</span><span class="unit">kg</span></div>
+      </div>
+      <div class="row" style="gap:10px; align-items:flex-start">
+        <div class="seg" id="chartMode">
+          <button data-m="weight" class="active">重量</button>
+          <button data-m="dual">主/副/合力</button>
+        </div>
+        <button id="btnZero" class="tiny" disabled title="将当前读数设为 0（去皮）；再次点击取消归零">归零（去皮）</button>
+      </div>
+    </div>
+    <div class="row" style="margin-top:4px; gap:18px; font-size:13px; color:var(--muted)">
+      <span>主设备：<b id="mMain" style="color:var(--text)">0.0</b> kg</span>
+      <span>副设备：<b id="mSub" style="color:var(--text)">—</b> kg</span>
+      <span>合力：<b id="mComb" style="color:var(--text)">—</b> kg</span>
+    </div>
+    <div class="chart-wrap" style="margin-top:10px"><canvas id="chart"></canvas></div>
+  </div>
+
+  <!-- 统计 -->
+  <div class="col-5 card">
+    <div class="row" style="justify-content:space-between">
+      <h3 style="margin:0">本次统计</h3>
+      <button id="btnReset" class="tiny">清零统计</button>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="k">峰值 +（最大）</div><div class="v" id="sPeakP">0.0<small> kg</small></div></div>
+      <div class="stat"><div class="k">峰值 -（最小）</div><div class="v" id="sPeakN">0.0<small> kg</small></div></div>
+      <div class="stat"><div class="k">窗口均值</div><div class="v" id="sAvg">0.0<small> kg</small></div></div>
+      <div class="stat"><div class="k">采样点数</div><div class="v" id="sCount">0</div></div>
+      <div class="stat"><div class="k">运行时长</div><div class="v" id="sDur">0.0<small> s</small></div></div>
+      <div class="stat"><div class="k">丢帧/同步</div><div class="v" id="sDrop">0</div></div>
+    </div>
+    <details style="margin-top:12px">
+      <summary>温度基准校正（可选）</summary>
+      <div class="note" style="margin:6px 0">在已知温度 TA 下读取一次原始码值 YA 作为基准，后续自动换算实际温度：T = YB·(273.15+TA)/YA − 273.15</div>
+      <div class="field-row">
+        <div><label>参考温度 TA (°C)</label><input id="taIn" type="number" value="25" step="0.1"></div>
+        <div><label>参考原始码值 YA</label><input id="yaIn" type="number" placeholder="读取后填入"></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="btnSetTempRef" class="tiny">设为基准</button>
+        <button id="btnReadTemp" class="tiny" disabled>读取温度原始值</button>
+        <span class="note">原始码值：<code id="tempRaw">—</code></span>
+      </div>
+    </details>
+  </div>
+
+  <!-- 控制 -->
+  <div class="col-5 card">
+    <h3 style="margin:0 0 8px">控制指令</h3>
+    <details open>
+      <summary>校准比例系数</summary>
+      <div class="note" style="margin:6px 0">校准因子 = 当前测量值 ÷ 标准砝码值，放大 10000 倍后发送。</div>
+      <div class="field-row">
+        <div><label>标准砝码值 (kg)</label><input id="calStd" type="number" step="0.01" placeholder="如 10"></div>
+        <div><label>当前测量值 (kg)</label><input id="calMeas" type="number" step="0.01" placeholder="如 10.46"></div>
+      </div>
+      <div class="row" style="margin-top:8px">
+        <button id="btnCal" class="tiny" disabled>发送校准因子</button>
+        <button id="btnRestDef" class="tiny" disabled>恢复默认</button>
+      </div>
+    </details>
+  </div>
+
+  <!-- 录制 -->
+  <div class="col-7 card">
+    <div class="row" style="justify-content:space-between">
+      <h3 style="margin:0">数据录制</h3>
+      <div class="row">
+        <button id="btnRec" class="tiny" disabled>开始录制</button>
+        <button id="btnExport" class="tiny" disabled>导出 CSV</button>
+      </div>
+    </div>
+    <div class="note" style="margin-top:8px">录制将保存全部原始采样点（含主/副/合力与相对时间），停止后可导出为 CSV 供 Excel 分析。</div>
+    <div class="kv" style="margin-top:8px"><span>录制状态</span><b id="recState">空闲</b></div>
+    <div class="kv"><span>已记录点数</span><b id="recCount">0</b></div>
+  </div>
+
+  <!-- 信号滤波 -->
+  <div class="col-12 card">
+    <h3 style="margin:0 0 8px">信号滤波</h3>
+    <div class="row" style="gap:28px; flex-wrap:wrap; align-items:flex-start">
+
+      <!-- 巴特沃斯低通 -->
+      <div style="min-width:250px; flex:1">
+        <label class="row" style="gap:6px; margin:0 0 6px; cursor:pointer; font-weight:600">
+          <input type="checkbox" id="filtOn" checked style="width:auto"> 巴特沃斯低通（平滑）
+        </label>
+        <div class="field-row">
+          <div><label>截止频率 fc (Hz)</label><input type="number" id="filtFc" value="20" min="1" max="200" step="1"></div>
+          <div style="max-width:120px"><label>阶数</label>
+            <select id="filtOrder" style="width:100%; padding:8px 10px; border:1px solid var(--line); border-radius:8px; font:inherit; color:var(--text)">
+              <option value="2">2 阶</option><option value="4" selected>4 阶</option>
+            </select>
+          </div>
+        </div>
+        <div class="note" style="margin-top:4px">去除 1000 Hz 高频噪声；fc 越高保留细节越多。</div>
+      </div>
+
+      <!-- 三点滑动清洗：常开，无开关无设置（移植自 win.py _push_point，参数固定 30/5/修零） -->
+      <div class="note" style="align-self:center">
+        三点滑动清洗 <b>常开</b>（固定参数：检测 30 / 保留 5 / 修复孤立 0），无需设置。
+      </div>
+
+    </div>
+    <div class="row" style="margin-top:10px; justify-content:space-between; flex-wrap:wrap; gap:8px">
+      <span class="note">状态：<b id="filtStatus">巴特沃斯 开 · 4 阶 · 20 Hz</b></span>
+      <span class="note">显示与统计基于滤波值；录制 CSV 同时保存原始值与滤波值。</span>
+    </div>
+  </div>
+
+  <!-- 日志 -->
+  <div class="col-12 card">
+    <div class="row" style="justify-content:space-between">
+      <h3 style="margin:0">运行日志</h3>
+      <button id="btnClearLog" class="tiny">清空</button>
+    </div>
+    <div id="log" class="log" style="margin-top:10px"></div>
+    <details style="margin-top:12px">
+      <summary>使用说明 / 兼容性</summary>
+      <div class="note" style="margin-top:8px">
+        <p>1. 浏览器需支持 Web Bluetooth：桌面版与 Android 版的 Chrome、Edge 等 Chromium 内核浏览器均可使用。</p>
+        <p style="background:#fff3e0;padding:9px 11px;border-radius:8px;border:1px solid #fcd9a5">
+          <b>⚠️ iOS / iPadOS 全都不支持（重要）：</b>苹果强制 iPhone / iPad 上的<b>所有</b>浏览器（Safari、Chrome、Edge、Firefox…）共用 WebKit 内核，而 WebKit 至今未实现 Web Bluetooth，因此<b>在 iPad / iPhone 上无法直接打开本网页连接设备</b>，换浏览器无效。可行的替代方案：
+          <br>① 改用 <b>安卓平板</b>或<b>电脑</b>的 Chrome / Edge（零改动，原生支持）；
+          <br>② 用 ESP32 等做一个 <b>BLE→WiFi 网关</b>，由网关连接 RexForce 并通过 WebSocket 转发，网页改连局域网 WebSocket（仍是纯网页，无需上架）；
+          <br>③ 用 Capacitor 把本页打包为 <b>iOS 原生 App</b>（蓝牙插件底层调用 CoreBluetooth，需 Mac + 苹果开发者账号）；
+          <br>④ 改用<b>微信小程序</b>：设备官方已提供「体能训练追踪Lab」，或用 <code>wx</code> 蓝牙 API 自行移植。
+        </p>
+        <p>2. 本页必须通过<b>安全上下文</b>打开：<code>https://</code> 或 <code>localhost</code>。直接双击 <code>file://</code> 在部分浏览器可能被拦截，建议用本地服务器（如 <code>python -m http.server</code>）或部署到 HTTPS 站点。</p>
+        <p>3. 点击「连接设备」后在系统弹窗中选择 <code>Force-XXXX</code> 设备；连接后设备立即推送数据，LED 转为常亮。</p>
+        <p>4. 协议：服务 <code>0000FFE5…</code>，TX(Notify) <code>0000FFE4…</code>，RX(Write) <code>0000FFE9…</code>；每帧固定 244 字节，单帧含 80 点（单机）或 40 组（双机），每点 3 字节含校验和，校验失败自动丢弃。</p>
+        <p>5. 建议连接后设备 MTU ≥ 244（默认 400）。</p>
+      </div>
+    </details>
+  </div>
+
+</div>
+
+<script>
+// ===================== 协议常量 =====================
+const SERVICE_UUID = '0000ffe5-0000-1000-8000-00805f9a34fb';
+const TX_UUID      = '0000ffe4-0000-1000-8000-00805f9a34fb';
+const RX_UUID      = '0000ffe9-0000-1000-8000-00805f9a34fb';
+const FRAME_LEN    = 244;
+const DATA_LEN     = 240;
+
+// ===================== 状态 =====================
+let device=null, server=null, service=null, txChar=null, rxChar=null;
+let connected=false, curMode='unknown';           // 'single' | 'dual' | 'unknown'
+let rxBuffer = new Uint8Array(0);
+let globalSample = 0;
+let lastTs = -1, dropCount = 0;
+
+// 环形缓冲（用于绘图，最近若干点）
+const MAXPTS = 3000;
+const ringMain = new Float32Array(MAXPTS);
+const ringSub  = new Float32Array(MAXPTS);
+const ringComb = new Float32Array(MAXPTS);
+let ringHead=0, ringFilled=0, ringStartSample = 0;
+
+// 统计
+let session = { peakP:-Infinity, peakN:Infinity, count:0, startMs:0, lastMain:0, lastSub:0, lastComb:0 };
+let tempRef = { ta:25, ya:null };
+
+// 录制
+let recording=false, recData=[], recStartSample=0, recButtonsReady=false;
+
+// 滤波（实时巴特沃斯低通）
+let filterOn = true;
+let filtFc = 20, filtOrder = 4;
+let filtMain = null, filtSub = null;
+const FS = 1000;   // 设备采样率 Hz
+
+// 三点滑动清洗（移植自 win.py _push_point）—— 常开，参数固定，无开关无设置
+let tpOn = true;   // 始终开启
+const tpDetect = 30, tpKeep = 5, tpZeroRepair = true, tpZeroMin = 1;
+let tpMain = null, tpSub = null;
+
+// 归零（去皮）：记录当前读数偏移，从显示/统计/录制值中扣除
+let zeroOn = false, zeroMain = 0, zeroSub = 0;
+
+// 绘图模式
+let chartSel='weight';   // 'weight' | 'dual'
+
+// ===================== DOM =====================
+const $ = id => document.getElementById(id);
+const logEl = $('log');
+function log(msg, cls='') {
+  const t = new Date().toLocaleTimeString('zh-CN',{hour12:false});
+  const span = document.createElement('div');
+  span.innerHTML = `<span class="t">[${t}]</span> <span class="${cls}">${msg}</span>`;
+  logEl.appendChild(span); logEl.scrollTop = logEl.scrollHeight;
+}
+function fmt(v, d=2){ return (v>=0?'':'') + v.toFixed(d); }
+
+// ===================== Web BLE =====================
+function checkSupport(){
+  if (!navigator.bluetooth){ log('当前浏览器不支持 Web Bluetooth：iOS/iPadOS 的所有浏览器（含 Safari/Chrome/Edge）均不支持，请改用安卓或电脑的 Chrome·Edge，或用 BLE→WiFi 网关 / 微信小程序。','e'); return false; }
+  if (!window.isSecureContext){ log('非安全上下文（isSecureContext=false）。请通过 https:// 或 localhost 打开本页。','e'); return false; }
+  return true;
+}
+
+async function connect(){
+  if (!checkSupport()) return;
+  try {
+    log('正在请求设备（请在弹窗中选择 Force-XXXX）…','i');
+    device = await navigator.bluetooth.requestDevice({
+      filters: [{ namePrefix: 'Force-' }],
+      optionalServices: [SERVICE_UUID]
+    });
+  } catch(e){ log('选择设备失败：' + e.message,'e'); return; }
+
+  device.addEventListener('gattserverdisconnected', onDisconnected);
+  try {
+    log('连接 GATT…','i');
+    server = await device.gatt.connect();
+    service = await server.getPrimaryService(SERVICE_UUID);
+    txChar = await service.getCharacteristic(TX_UUID);
+    rxChar = await service.getCharacteristic(RX_UUID);
+    await txChar.startNotifications();
+    txChar.addEventListener('characteristicvaluechanged', onNotify);
+
+    connected = true;
+    curMode='unknown'; globalSample=0; rxBuffer=new Uint8Array(0);
+    lastTs=-1; dropCount=0;
+    ringHead=0; ringFilled=0;
+    session = { peakP:-Infinity, peakN:Infinity, count:0, startMs:performance.now(), lastMain:0, lastSub:0, lastComb:0 };
+
+    $('devName').textContent = device.name || '未知';
+    setState('on','已连接');
+    if (filterOn){ ensureFilter(); resetFilter(); }   // 连接时重建并清零滤波状态
+    ensureTP(); resetTP();                             // 三点清洗常开，连接时重建并清零
+    $('btnConnect').disabled = true;
+    $('btnDisconnect').disabled = false;
+    ['btnCal','btnRestDef','btnReadTemp','btnRec','btnZero'].forEach(id=>$(id).disabled=false);
+    log('已连接：' + (device.name||''),'ok');
+  } catch(e){
+    log('连接失败：' + e.message,'e');
+    try{ await server?.disconnect?.(); }catch(_){}
+  }
+}
+
+function onDisconnected(){
+  connected=false;
+  zeroOn=false; zeroMain=0; zeroSub=0; $('btnZero').textContent='归零（去皮）';
+  setState('off','已断开');
+  $('btnConnect').disabled=false;
+  $('btnDisconnect').disabled=true;
+  ['btnCal','btnRestDef','btnReadTemp','btnRec','btnZero'].forEach(id=>$(id).disabled=true);
+  if (recording) stopRec();
+  log('设备已断开连接。','e');
+}
+
+function disconnect(){
+  if (rxChar) try{ rxChar.removeEventListener('characteristicvaluechanged', onNotify); }catch(_){}
+  if (device && device.gatt && device.gatt.connected){ try{ device.gatt.disconnect(); }catch(_){} }
+}
+
+async function writeCmd(bytes){
+  if (!connected || !rxChar) { log('未连接，无法发送指令。','e'); return; }
+  try { await rxChar.writeValue(new Uint8Array(bytes)); }
+  catch(e){ log('发送指令失败：' + e.message,'e'); }
+}
+
+// ===================== 数据接收与解析 =====================
+function onNotify(event){
+  const v = new Uint8Array(event.target.value.buffer);
+  // 拼接缓冲
+  const merged = new Uint8Array(rxBuffer.length + v.length);
+  merged.set(rxBuffer, 0); merged.set(v, rxBuffer.length);
+  rxBuffer = merged;
+  parseBuffer();
+}
+
+function parseBuffer(){
+  let guard = 0;
+  while (rxBuffer.length >= 1 && guard++ < 5000){
+    const b0 = rxBuffer[0];
+    // 244 字节数据帧
+    if (b0 === 0x01 && rxBuffer.length >= FRAME_LEN && (rxBuffer[1]===0x03 || rxBuffer[1]===0x05)){
+      processFrame(rxBuffer.slice(0, FRAME_LEN));
+      rxBuffer = rxBuffer.slice(FRAME_LEN);
+    }
+    // 6 字节温度响应帧 0x54 0xDD B3 B2 B1 B0
+    else if (b0 === 0x54 && rxBuffer.length >= 6 && rxBuffer[1]===0xDD){
+      processTemperature(rxBuffer.slice(0,6));
+      rxBuffer = rxBuffer.slice(6);
+    }
+    // 不足一帧，等下一包
+    else if (rxBuffer.length < FRAME_LEN && b0 !== 0x54){
+      break;
+    }
+    // 同步丢失：跳过一个字节
+    else {
+      rxBuffer = rxBuffer.slice(1);
+      dropCount++;
+    }
+  }
+  $('sDrop').textContent = dropCount;
+}
+
+function decodePoint(high, low, checksum){
+  if (((high + low) & 0xFF) !== checksum) return null;   // 校验失败丢弃
+  let val = (high << 8) | low;
+  if (val >= 32768) val -= 65536;                          // 有符号
+  return val / 10.0;                                       // 0.1 kg 分辨率
+}
+
+function processFrame(frame){
+  const func = frame[1];
+  const ts = (frame[2] << 8) | frame[3];
+  // 帧间隔检测（约 80ms），用于粗略丢帧统计
+  if (lastTs >= 0){
+    let dt = ts - lastTs; if (dt < 0) dt += 65535;
+    if (dt > 200) dropCount++; // 跳变过大，疑似丢帧
+  }
+  lastTs = ts;
+
+  if (func === 0x03){
+    if (curMode !== 'single'){ curMode='single'; $('modeText').textContent='单机'; }
+    for (let i=4; i<FRAME_LEN; i+=3){
+      const w = decodePoint(frame[i], frame[i+1], frame[i+2]);
+      if (w !== null) pushSample(w, 0, w, false);
+    }
+  } else if (func === 0x05){
+    if (curMode !== 'dual'){ curMode='dual'; $('modeText').textContent='双机'; }
+    for (let i=4; i<FRAME_LEN; i+=6){
+      const main = decodePoint(frame[i],   frame[i+1], frame[i+2]);
+      const sub  = decodePoint(frame[i+3], frame[i+4], frame[i+5]);
+      if (main !== null && sub !== null) pushSample(main, sub, main+sub, true);
+    }
+  }
+}
+
+function processTemperature(bytes){
+  let raw = (bytes[2]<<24)|(bytes[3]<<16)|(bytes[4]<<8)|bytes[5];
+  if (raw >= 0x80000000) raw -= 0x100000000;   // 有符号 32 位
+  $('tempRaw').textContent = raw;
+  if (tempRef.ya !== null && tempRef.ya !== 0){
+    const tb = raw * (273.15 + tempRef.ta) / tempRef.ya - 273.15;
+    $('tempVal').textContent = tb.toFixed(2) + ' °C';
+    log('温度原始值 ' + raw + ' → ' + tb.toFixed(2) + ' °C','i');
+  } else {
+    $('tempVal').textContent = '需设基准';
+    log('温度原始值 ' + raw + '（未设置基准，请在温度校正中填入 YA 后重读）','i');
+  }
+}
+
+// ===================== 巴特沃斯低通滤波器 =====================
+class Biquad {
+  constructor(b0,b1,b2,a1,a2){ this.b0=b0;this.b1=b1;this.b2=b2;this.a1=a1;this.a2=a2; this.x1=0;this.x2=0;this.y1=0;this.y2=0; }
+  process(x){
+    const y = this.b0*x + this.b1*this.x1 + this.b2*this.x2 - this.a1*this.y1 - this.a2*this.y2;
+    this.x2=this.x1; this.x1=x; this.y2=this.y1; this.y1=y;
+    return y;
+  }
+  reset(){ this.x1=this.x2=this.y1=this.y2=0; }
+}
+
+// 由 RBJ cookbook 生成 n 阶 Butterworth 低通所需的多个双二阶节（级联）
+function makeButterworthStages(fs, fc, order){
+  const stages=[];
+  const nSections=Math.floor(order/2);
+  const w0=2*Math.PI*fc/fs, cosw0=Math.cos(w0), sinw0=Math.sin(w0);
+  const alpha=sinw0/Math.SQRT2;   // Q=1/√2 的 Butterworth 单节
+  for (let k=1;k<=nSections;k++){
+    const Q = 1/(2*Math.cos((2*k-1)*Math.PI/(2*order)));   // 第 k 节的极点 Q
+    const a0=1+alpha/Q, a1=-2*cosw0, a2=1-alpha/Q;
+    const b0=(1-cosw0)/2, b1=1-cosw0, b2=(1-cosw0)/2;
+    stages.push(new Biquad(b0/a0, b1/a0, b2/a0, a1/a0, a2/a0));
+  }
+  return stages;
+}
+
+class FilterChain {
+  constructor(fs, fc, order){ this.fs=fs; this.fc=fc; this.order=order; this.stages=makeButterworthStages(fs,fc,order); }
+  process(x){ let v=x; for (const s of this.stages) v=s.process(v); return v; }
+  reset(){ for (const s of this.stages) s.reset(); }
+}
+
+function ensureFilter(){
+  if (!filterOn) return;
+  if (!filtMain || filtMain.fc!==filtFc || filtMain.order!==filtOrder){
+    filtMain = new FilterChain(FS, filtFc, filtOrder);
+    filtSub  = new FilterChain(FS, filtFc, filtOrder);
+  }
+}
+function resetFilter(){ if (filtMain){ filtMain.reset(); filtSub.reset(); } }
+
+// ===================== 三点滑动窗口数据清洗 =====================
+// 移植自 win.py _push_point：第一层 |中点-上一处理值|>DETECT 触发异常，
+// 第二层 |插补值-中点|>KEEP 时用插补值替换，否则保留原值；可修复孤立 0。
+class ThreePointCleaner {
+  constructor(thresholdDetect = 30.0, thresholdKeep = 5.0, enableZeroRepair = true, zeroNormalMinAbs = 1) {
+    this.THRESHOLD_DETECT = thresholdDetect;
+    this.THRESHOLD_KEEP   = thresholdKeep;
+    this.enableZeroRepair = enableZeroRepair;
+    this.zeroNormalMinAbs = zeroNormalMinAbs;
+    this._rawBuf = [];   // 原始值缓冲（最多保留3个）
+    this._resBuf = [];   // 处理值缓冲（最多保留2个）
+  }
+  filter(value) {
+    this._rawBuf.push(value);
+    let cleaned;
+    if (this._rawBuf.length < 3) {
+      cleaned = value;
+      this._resBuf.push(cleaned);
+    } else {
+      const bPrev = this._rawBuf[this._rawBuf.length - 3];
+      let bMid    = this._rawBuf[this._rawBuf.length - 2];
+      const bCur  = this._rawBuf[this._rawBuf.length - 1];
+      if (this.enableZeroRepair && bMid === 0 && Math.abs(bPrev) > this.zeroNormalMinAbs && Math.abs(bCur) > this.zeroNormalMinAbs) {
+        bMid = (bPrev + bCur) / 2;
+      }
+      const fPrev = this._resBuf.length >= 2
+        ? this._resBuf[this._resBuf.length - 2]
+        : this._resBuf[this._resBuf.length - 1];
+      const interp = (fPrev + bCur) / 2.0;
+      if (Math.abs(bMid - fPrev) > this.THRESHOLD_DETECT &&
+          Math.abs(interp - bMid) > this.THRESHOLD_KEEP) {
+        cleaned = interp;
+      } else {
+        cleaned = bMid;
+      }
+      this._resBuf.push(cleaned);
+      if (this._resBuf.length > 2) this._resBuf.shift();
+      if (this._rawBuf.length > 3) this._rawBuf.shift();
+    }
+    return cleaned;
+  }
+  reset() { this._rawBuf = []; this._resBuf = []; }
+}
+function ensureTP(){
+  // 三点清洗常开，参数固定（30/5/修零），仅首次创建两个通道实例
+  if (!tpMain){
+    tpMain = new ThreePointCleaner(tpDetect, tpKeep, tpZeroRepair, tpZeroMin);
+    tpSub  = new ThreePointCleaner(tpDetect, tpKeep, tpZeroRepair, tpZeroMin);
+  }
+}
+function resetTP(){ if (tpMain){ tpMain.reset(); tpSub.reset(); } }
+
+function pushSample(main, sub, comb, isDual){
+  // 数据清洗管线：原始 → 三点滑动清洗（去尖峰/修零，常开） → 巴特沃斯低通（平滑）
+  let dMain=main, dSub=sub;
+  ensureTP();
+  dMain = tpMain.filter(dMain);
+  dSub  = tpSub.filter(dSub);
+  if (filterOn){
+    ensureFilter();
+    dMain = filtMain.process(dMain);
+    dSub  = filtSub.process(dSub);
+  }
+  let dComb = dMain + dSub;
+
+  // 归零（去皮）：扣除零点偏移
+  if (zeroOn){
+    dMain -= zeroMain;
+    dSub  -= zeroSub;
+    dComb = dMain + dSub;
+  }
+
+  // 环形缓冲（存显示值）
+  ringMain[ringHead] = dMain;
+  ringSub[ringHead]  = dSub;
+  ringComb[ringHead] = dComb;
+  ringHead = (ringHead + 1) % MAXPTS;
+  if (ringFilled < MAXPTS){ ringFilled++; ringStartSample = globalSample - ringFilled + 1; }
+
+  // 统计（基于滤波值）
+  session.count++;
+  const ref = isDual ? dComb : dMain;
+  if (ref > session.peakP) session.peakP = ref;
+  if (ref < session.peakN) session.peakN = ref;
+  session.lastMain = dMain; session.lastSub = dSub; session.lastComb = dComb;
+
+  // 录制（原始 + 滤波）
+  if (recording){
+    recData.push({ idx: globalSample, t: (globalSample)/1000, mode: isDual?'dual':'single',
+      main, sub, comb, mainF: dMain, subF: dSub, combF: dComb });
+    $('recCount').textContent = recData.length;
+  }
+  globalSample++;
+}
+
+// ===================== 界面更新 =====================
+function updateUI(){
+  const m = curMode==='dual' ? session.lastComb : session.lastMain;
+  const bigEl = $('bigVal');
+  bigEl.textContent = fmt(m,1);
+  bigEl.className = 'big ' + (m<0 ? 'neg' : 'pos');
+  $('mMain').textContent = fmt(session.lastMain,1);
+  $('mSub').textContent  = curMode==='dual' ? fmt(session.lastSub,1) : '—';
+  $('mComb').textContent = curMode==='dual' ? fmt(session.lastComb,1) : '—';
+
+  if (session.peakP > -Infinity) $('sPeakP').innerHTML = fmt(session.peakP,1)+'<small> kg</small>';
+  if (session.peakN <  Infinity) $('sPeakN').innerHTML = fmt(session.peakN,1)+'<small> kg</small>';
+  $('sCount').textContent = session.count;
+  if (connected){
+    const dur = (performance.now()-session.startMs)/1000;
+    $('sDur').innerHTML = dur.toFixed(1)+'<small> s</small>';
+  }
+  // 窗口均值
+  if (ringFilled>0){
+    let s=0; const arr = (chartSel==='dual'||curMode!=='dual') ? ringComb : ringComb;
+    const useArr = curMode==='dual' ? ringComb : ringMain;
+    for (let i=0;i<ringFilled;i++){
+      const idx=(ringHead - ringFilled + i + MAXPTS*2)%MAXPTS;
+      s += useArr[idx];
+    }
+    $('sAvg').innerHTML = (s/ringFilled).toFixed(2)+'<small> kg</small>';
+  }
+}
+
+function setState(cls, txt){
+  const b = $('stateBadge');
+  b.className = 'badge ' + (cls==='on'?'on':(cls==='scan'?'scan':'off'));
+  $('stateText').textContent = txt;
+}
+
+// ===================== 绘图 =====================
+const canvas = $('chart');
+const ctx = canvas.getContext('2d');
+let cw=0, ch=0;
+function setupCanvas(){
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  cw = rect.width; ch = rect.height;
+  canvas.width = Math.round(cw*dpr);
+  canvas.height = Math.round(ch*dpr);
+  ctx.setTransform(dpr,0,0,dpr,0,0);
+}
+function drawChart(){
+  ctx.clearRect(0,0,cw,ch);
+  // 背景网格
+  ctx.strokeStyle = '#eef2f7'; ctx.lineWidth = 1;
+  for (let i=0;i<=4;i++){ const y=ch*i/4; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cw,y); ctx.stroke(); }
+
+  if (ringFilled < 2){ requestAnimationFrame(loop); return; }
+
+  // 选择序列
+  let series=[];
+  if (curMode==='dual' && chartSel==='dual'){
+    series = [ {arr:ringComb,color:'#2563eb',w:2.4,label:'合力'},
+               {arr:ringMain,color:'#16a34a',w:1.4,label:'主'},
+               {arr:ringSub ,color:'#d97706',w:1.4,label:'副'} ];
+  } else {
+    series = [ {arr: ringFilled? (curMode==='dual'?ringComb:ringMain) : ringMain, color:'#2563eb', w:2.4, label:'重量'} ];
+  }
+
+  // 计算范围
+  let mn=Infinity, mx=-Infinity;
+  for (const s of series){
+    for (let i=0;i<ringFilled;i++){
+      const idx=(ringHead - ringFilled + i + MAXPTS*2)%MAXPTS;
+      const v=s.arr[idx];
+      if (v<mn) mn=v; if (v>mx) mx=v;
+    }
+  }
+  if (!isFinite(mn)){ requestAnimationFrame(loop); return; }
+  if (mn===mx){ mn-=1; mx+=1; }
+  if (mn>0) mn=0; if (mx<0) mx=0;            // 始终包含 0 线
+  const pad=(mx-mn)*0.12; mn-=pad; mx+=pad;
+
+  const X = i => cw * i/(ringFilled-1);
+  const Y = v => ch - ( (v-mn)/(mx-mn) )*ch;
+
+  // 0 线
+  if (mn<0 && mx>0){
+    ctx.strokeStyle='#cbd5e1'; ctx.setLineDash([4,4]);
+    const y0=Y(0); ctx.beginPath(); ctx.moveTo(0,y0); ctx.lineTo(cw,y0); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // 画序列
+  for (const s of series){
+    ctx.strokeStyle=s.color; ctx.lineWidth=s.w; ctx.beginPath();
+    for (let i=0;i<ringFilled;i++){
+      const idx=(ringHead - ringFilled + i + MAXPTS*2)%MAXPTS;
+      const x=X(i), y=Y(s.arr[idx]);
+      if (i===0) ctx.moveTo(x,y); else ctx.lineTo(x,y);
+    }
+    ctx.stroke();
+  }
+
+  // 标注范围
+  ctx.fillStyle='#6b7686'; ctx.font='11px sans-serif';
+  ctx.fillText(mx.toFixed(1)+' kg', 4, 12);
+  ctx.fillText(mn.toFixed(1)+' kg', 4, ch-4);
+  ctx.fillText('窗口 '+ (ringFilled/1000).toFixed(2) +' s', cw-90, 12);
+  requestAnimationFrame(loop);
+}
+
+let lastUI=0;
+function loop(ts){
+  if (ts - lastUI > 60){ updateUI(); lastUI=ts; }
+  drawChart();
+}
+
+// ===================== 录制 =====================
+function startRec(){
+  recording=true; recData=[]; recStartSample=globalSample;
+  $('recState').textContent='录制中'; $('btnRec').textContent='停止录制';
+  $('btnExport').disabled=false;
+  log('开始录制数据。','ok');
+}
+function stopRec(){
+  recording=false;
+  $('recState').textContent='已停止 ('+recData.length+' 点)';
+  $('btnRec').textContent='开始录制';
+  log('停止录制，共 '+recData.length+' 点。','ok');
+}
+function exportCSV(){
+  if (!recData.length){ log('没有可导出的数据。','e'); return; }
+  let csv='sample_index,time_s,mode,main_kg,sub_kg,combined_kg,main_filt_kg,sub_filt_kg,combined_filt_kg\n';
+  for (const r of recData){
+    csv += `${r.idx},${r.t.toFixed(3)},${r.mode},${r.main.toFixed(3)},${r.sub.toFixed(3)},${r.comb.toFixed(3)},${r.mainF.toFixed(3)},${r.subF.toFixed(3)},${r.combF.toFixed(3)}\n`;
+  }
+  const blob=new Blob([csv],{type:'text/csv'});
+  const url=URL.createObjectURL(blob);
+  const a=document.createElement('a');
+  a.href=url; a.download='rexforce_'+Date.now()+'.csv';
+  a.click(); URL.revokeObjectURL(url);
+  log('已导出 CSV：'+recData.length+' 点。','ok');
+}
+
+// ===================== 事件绑定 =====================
+$('btnConnect').onclick = connect;
+$('btnDisconnect').onclick = disconnect;
+$('btnReset').onclick = ()=>{
+  session.peakP=-Infinity; session.peakN=Infinity; session.count=0; session.startMs=performance.now();
+  $('sPeakP').innerHTML='0.0<small> kg</small>'; $('sPeakN').innerHTML='0.0<small> kg</small>';
+  log('统计已清零。','i');
+};
+$('btnCal').onclick = ()=>{
+  const std=parseFloat($('calStd').value), meas=parseFloat($('calMeas').value);
+  if (!std || !meas){ log('请填写标准砝码值与当前测量值。','e'); return; }
+  const factor = meas/std;
+  const fi = Math.round(factor*10000) & 0xFFFFFFFF;
+  writeCmd([0x54,0xAA,(fi>>>24)&0xFF,(fi>>>16)&0xFF,(fi>>>8)&0xFF,fi&0xFF]);
+  log('发送校准因子：'+factor.toFixed(4)+'（整数 '+fi+'）','ok');
+};
+$('btnRestDef').onclick = ()=>{ writeCmd([0x54,0xF8]); log('已发送：恢复默认比例系数','ok'); };
+$('btnZero').onclick = ()=>{
+  if (zeroOn){
+    zeroOn=false; zeroMain=0; zeroSub=0;
+    $('btnZero').textContent='归零（去皮）';
+    log('已取消归零。','i');
+  } else {
+    zeroMain = session.lastMain; zeroSub = session.lastSub; zeroOn=true;
+    $('btnZero').textContent='取消归零';
+    log('已归零（去皮）：主 '+zeroMain.toFixed(2)+' / 副 '+zeroSub.toFixed(2)+' kg','ok');
+  }
+};
+$('btnReadTemp').onclick = ()=>{ writeCmd([0x54,0xDD]); log('已请求温度原始值…','i'); };
+$('btnSetTempRef').onclick = ()=>{
+  const ta=parseFloat($('taIn').value), ya=parseFloat($('yaIn').value);
+  if (!ya){ log('请先读取温度原始值并填入 YA。','e'); return; }
+  tempRef={ta,ya};
+  log('温度基准已设置：TA='+ta+'°C, YA='+ya,'ok');
+};
+$('btnRec').onclick = ()=> recording ? stopRec() : startRec();
+$('btnExport').onclick = exportCSV;
+$('btnClearLog').onclick = ()=> logEl.innerHTML='';
+
+// 滤波控制
+function updateFiltStatus(){
+  if (!filterOn){ $('filtStatus').textContent = '巴特沃斯 关 · 三点清洗 常开 (30/5 修零)'; return; }
+  const parts=[];
+  parts.push('巴特沃斯 开 · '+filtOrder+' 阶 · '+filtFc+' Hz');
+  parts.push('三点清洗 常开 ('+tpDetect+'/'+tpKeep+(tpZeroRepair?' 修零':'')+')');
+  $('filtStatus').textContent = parts.join(' · ');
+}
+function rebuildFilters(){
+  if (filterOn){ ensureFilter(); resetFilter(); }
+  ensureTP(); resetTP();
+}
+$('filtOn').onchange = ()=>{
+  filterOn = $('filtOn').checked; rebuildFilters(); updateFiltStatus();
+  log('巴特沃斯 '+(filterOn?'开':'关'),'i');
+};
+$('filtFc').onchange = ()=>{
+  filtFc = Math.max(1, Math.min(200, parseInt($('filtFc').value)||20));
+  $('filtFc').value = filtFc;
+  if (filterOn){ ensureFilter(); resetFilter(); } updateFiltStatus();
+  log('巴特沃斯截止频率 → '+filtFc+' Hz','i');
+};
+$('filtOrder').onchange = ()=>{
+  filtOrder = parseInt($('filtOrder').value)||4;
+  if (filterOn){ ensureFilter(); resetFilter(); } updateFiltStatus();
+  log('巴特沃斯阶数 → '+filtOrder+' 阶','i');
+};
+document.querySelectorAll('#chartMode button').forEach(b=>{
+  b.onclick = ()=>{
+    document.querySelectorAll('#chartMode button').forEach(x=>x.classList.remove('active'));
+    b.classList.add('active'); chartSel=b.dataset.m;
+  };
+});
+
+// 初始化
+updateFiltStatus();
+if (!navigator.bluetooth) log('当前浏览器不支持 Web Bluetooth：iOS/iPadOS 的所有浏览器（含 Safari/Chrome/Edge）均不支持，请改用安卓或电脑的 Chrome·Edge，或用 BLE→WiFi 网关 / 微信小程序。','e');
+else if (!window.isSecureContext) log('警告：非安全上下文，Web Bluetooth 可能被禁用。','e');
+else log('就绪。点击「连接设备」开始。','ok');
+window.addEventListener('resize', setupCanvas);
+setupCanvas();
+requestAnimationFrame(loop);
+</script>
+</body>
+</html>
