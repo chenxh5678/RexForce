@@ -206,7 +206,7 @@
       <!-- 巴特沃斯低通 -->
       <div style="min-width:250px; flex:1">
         <label class="row" style="gap:6px; margin:0 0 6px; cursor:pointer; font-weight:600">
-          <input type="checkbox" id="filtOn" checked style="width:auto"> 巴特沃斯低通（平滑）
+          <input type="checkbox" id="filtOn" style="width:auto"> 巴特沃斯低通（平滑）
         </label>
         <div class="field-row">
           <div><label>截止频率 fc (Hz)</label><input type="number" id="filtFc" value="20" min="1" max="200" step="1"></div>
@@ -216,7 +216,7 @@
             </select>
           </div>
         </div>
-        <div class="note" style="margin-top:4px">去除 1000 Hz 高频噪声；fc 越高保留细节越多。</div>
+        <div class="note" style="margin-top:4px">⚠ 截止频率设置不当会导致测量结果异常</div>
       </div>
 
       <!-- Hampel 实时尖峰过滤（窗口缓存 radius 点后输出中间点，延迟 ~10ms，人眼无感） -->
@@ -307,7 +307,7 @@ let tempRef = { ta:25, ya:null };
 let recording=false, recData=[], recStartSample=0, recButtonsReady=false;
 
 // 滤波（实时巴特沃斯低通）
-let filterOn = true;
+let filterOn = false;
 let filtFc = 20, filtOrder = 4;
 let filtMain = null, filtSub = null;
 let FS = 1000;   // 设备采样率 Hz（实际运行时动态计算）
