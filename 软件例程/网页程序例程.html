@@ -62,6 +62,7 @@
 
   canvas { width: 100%; height: 260px; display: block; }
   .chart-wrap { position: relative; }
+  .chart-wrap.hidden { display: none; }
 
   label { font-size: 12px; color: var(--muted); display: block; margin: 8px 0 3px; font-weight: 600; }
   input[type=number], input[type=text] {
@@ -82,6 +83,7 @@
   .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
   .seg button { border:none; border-radius:0; background:#fff; padding:6px 12px; }
   .seg button.active { background: var(--primary); color:#fff; }
+  #btnZero { border:1px solid var(--line); border-radius:8px; background:#fff; padding:6px 12px; font-weight:600; color:var(--muted); cursor:pointer; }
   code { background:#eef2f7; padding:1px 5px; border-radius:4px; font-size:12px; }
   .temp { font-variant-numeric: tabular-nums; font-weight:700; }
 </style>
@@ -93,20 +95,21 @@
     <div class="row" style="justify-content:space-between">
       <div>
         <h1>RexForce 测力台 · Web BLE 客户端</h1>
-        <div class="sub">纯网页实现 · Web Bluetooth API · 支持 Chrome / Edge / Android（⚠️ iOS / iPadOS 所有浏览器均不支持，见下方说明）</div>
+        <div class="sub">纯网页实现 · Web Bluetooth API · 支持手机、平板、电脑浏览器（IOS所有浏览器均不支持，见下方说明）</div>
       </div>
       <div class="row">
         <span id="stateBadge" class="badge off"><span class="dot"></span><span id="stateText">未连接</span></span>
         <button id="btnConnect" class="primary">连接设备</button>
-        <button id="btnDisconnect" class="warn" disabled>断开</button>
+        <button id="btnDisconnect" class="warn">断开</button>
       </div>
     </div>
     <div class="row" style="margin-top:10px">
       <span class="note">设备名称：<code id="devName">—</code></span>
       <span class="note">模式：<code id="modeText">未知</code></span>
-      <span class="note">采样率：1000 Hz</span>
+      <span class="note">采样率：<code id="sampleRate">—</code> Hz</span>
       <span class="note">温度：<span id="tempVal" class="temp">—</span></span>
     </div>
+    <div class="note" style="margin-top:4px">⚠ 手机端蓝牙直连芯片，采样率稳定 ~1000Hz；桌面浏览器走用户态 BLE 代理，受系统调度影响可能波动至 600~1000Hz。</div>
   </div>
 
   <!-- 主显示 -->
@@ -117,11 +120,14 @@
         <div><span id="bigVal" class="big pos">0.0</span><span class="unit">kg</span></div>
       </div>
       <div class="row" style="gap:10px; align-items:flex-start">
+        <label class="row" style="gap:4px; cursor:pointer; font-size:12px; color:var(--muted); font-weight:600; margin:0; align-items:center; height:28px">
+          <input type="checkbox" id="showChart" checked style="width:auto; margin:0"> 显示曲线
+        </label>
         <div class="seg" id="chartMode">
           <button data-m="weight" class="active">重量</button>
           <button data-m="dual">主/副/合力</button>
         </div>
-        <button id="btnZero" class="tiny" disabled title="将当前读数设为 0（去皮）；再次点击取消归零">归零（去皮）</button>
+        <button id="btnZero" disabled title="将当前读数设为 0（去皮）；再次点击取消归零">归零</button>
       </div>
     </div>
     <div class="row" style="margin-top:4px; gap:18px; font-size:13px; color:var(--muted)">
@@ -216,14 +222,14 @@
       <!-- Hampel 实时尖峰过滤（窗口缓存 radius 点后输出中间点，延迟 ~10ms，人眼无感） -->
       <div style="min-width:260px; flex:1">
         <label class="row" style="gap:6px; margin:0 0 6px; cursor:pointer; font-weight:600">
-          <input type="checkbox" id="hpOn" checked style="width:auto"> Hampel 尖峰过滤（中位数替换）
+          <input type="checkbox" id="hpOn" checked style="width:auto"> Hampel 尖峰过滤
         </label>
         <div class="field-row">
           <div><label>窗口半径</label><input type="number" id="hpRadius" value="10" min="3" max="50" step="1"></div>
           <div><label>σ 倍数</label><input type="number" id="hpSigma" value="6.0" min="1" max="20" step="0.5"></div>
           <div><label>最小幅度 (kg)</label><input type="number" id="hpMinDev" value="2.0" min="0" step="1"></div>
         </div>
-        <div class="note" style="margin-top:4px">MAD 自适应阈值；±radius 窗口取中位数替换离群尖峰。</div>
+        <div class="note" style="margin-top:4px">MAD 自适应阈值检测</div>
       </div>
 
     </div>
@@ -276,12 +282,22 @@ let rxBuffer = new Uint8Array(0);
 let globalSample = 0;
 let lastTs = -1, dropCount = 0;
 
+// 实际采样率追踪
+let actualFS = 0;
+let sampleTimeLog = [];   // performance.now() 时间戳，最近 1 秒窗口
+let lastRateUpdate = 0;
+
 // 环形缓冲（用于绘图，最近若干点）
 const MAXPTS = 3000;
 const ringMain = new Float32Array(MAXPTS);
 const ringSub  = new Float32Array(MAXPTS);
 const ringComb = new Float32Array(MAXPTS);
 let ringHead=0, ringFilled=0, ringStartSample = 0;
+// 窗口均值增量追踪（消除 updateUI 每 60ms 遍历 3000 点）
+let avgMainSum=0, avgCombSum=0;
+// 绘图范围缓存（增量更新，避免每帧 O(n) 遍历）
+let chartRangeMN = Infinity, chartRangeMX = -Infinity;
+let chartRangeFrames = 0; // 帧计数器，每 30 帧重算一次
 
 // 统计
 let session = { peakP:-Infinity, peakN:Infinity, count:0, startMs:0, lastMain:0, lastSub:0, lastComb:0 };
@@ -294,7 +310,7 @@ let recording=false, recData=[], recStartSample=0, recButtonsReady=false;
 let filterOn = true;
 let filtFc = 20, filtOrder = 4;
 let filtMain = null, filtSub = null;
-const FS = 1000;   // 设备采样率 Hz
+let FS = 1000;   // 设备采样率 Hz（实际运行时动态计算）
 
 // Hampel 实时尖峰过滤（窗口缓存后输出，延迟 ~10ms）
 let hpOn = true;
@@ -306,6 +322,7 @@ let zeroOn = false, zeroMain = 0, zeroSub = 0;
 
 // 绘图模式
 let chartSel='weight';   // 'weight' | 'dual'
+let showChart = true;
 
 // ===================== DOM =====================
 const $ = id => document.getElementById(id);
@@ -365,14 +382,14 @@ function finishConnect(){
   connected = true;
   curMode='unknown'; globalSample=0; rxBuffer=new Uint8Array(0);
   lastTs=-1; dropCount=0;
-  ringHead=0; ringFilled=0;
+  ringHead=0; ringFilled=0; avgMainSum=0; avgCombSum=0; chartRangeMN=Infinity; chartRangeMX=-Infinity; chartRangeFrames=10;
+  sampleTimeLog=[]; actualFS=0; FS=1000;
   session = { peakP:-Infinity, peakN:Infinity, count:0, startMs:performance.now(), lastMain:0, lastSub:0, lastComb:0 };
   $('devName').textContent = device.name || '未知';
   setState('on','已连接');
   if (filterOn){ ensureFilter(); resetFilter(); }   // 连接时重建并清零滤波状态
   if (hpOn){ ensureHP(); resetHP(); }                 // Hampel 尖峰过滤，连接时重建并清零
   $('btnConnect').disabled = true;
-  $('btnDisconnect').disabled = false;
   ['btnCal','btnRestDef','btnReadTemp','btnRec','btnZero'].forEach(id=>$(id).disabled=false);
   log('已连接：' + (device.name||''),'ok');
 }
@@ -404,10 +421,10 @@ function onDisconnected(){
   if (connecting) return;
   if (rxChar) try{ rxChar.removeEventListener('characteristicvaluechanged', onNotify); }catch(_){}
   connected=false;
-  zeroOn=false; zeroMain=0; zeroSub=0; $('btnZero').textContent='归零（去皮）';
+  zeroOn=false; zeroMain=0; zeroSub=0; $('btnZero').textContent='归零';
+  sampleTimeLog=[]; actualFS=0; $('sampleRate').textContent='—';
   setState('off','已断开');
   $('btnConnect').disabled=false;
-  $('btnDisconnect').disabled=true;
   ['btnCal','btnRestDef','btnReadTemp','btnRec','btnZero'].forEach(id=>$(id).disabled=true);
   if (recording) stopRec();
   if (!manualDisconnect && device){
@@ -433,8 +450,21 @@ async function autoReconnect(){
 
 function disconnect(){
   manualDisconnect = true;
+  autoReconnectTries = MAX_AUTO_RECONNECT; // 阻止自动重连
   if (rxChar) try{ rxChar.removeEventListener('characteristicvaluechanged', onNotify); }catch(_){}
-  if (device && device.gatt && device.gatt.connected){ try{ device.gatt.disconnect(); }catch(_){} }
+  if (device && device.gatt){
+    try{
+      if (device.gatt.connected) device.gatt.disconnect();
+      else device.gatt.disconnect(); // 即使 state 显示未连接也强制尝试断开
+    }catch(_){}
+  }
+  connected = false;
+  zeroOn = false; zeroMain = 0; zeroSub = 0; $('btnZero').textContent = '归零';
+  sampleTimeLog = []; actualFS = 0; $('sampleRate').textContent = '—';
+  setState('off', '已断开');
+  $('btnConnect').disabled = false;
+  ['btnCal','btnRestDef','btnReadTemp','btnRec','btnZero'].forEach(id=>$(id).disabled=true);
+  if (recording) stopRec();
 }
 
 async function writeCmd(bytes){
@@ -499,16 +529,31 @@ function processFrame(frame){
 
   if (func === 0x03){
     if (curMode !== 'single'){ curMode='single'; $('modeText').textContent='单机'; }
+    // 收集本帧所有原始点
+    const raw = [];
     for (let i=4; i<FRAME_LEN; i+=3){
       const w = decodePoint(frame[i], frame[i+1], frame[i+2]);
-      if (w !== null) pushSample(w, 0, w, false);
+      if (w !== null) raw.push(w);
     }
+    if (raw.length === 0) return;
+    // 批量 Hampel 清洗
+    const clean = hpOn ? (ensureHP(), hpMain.filter(raw)) : raw;
+    for (const w of clean) pushSample(w, 0, w, false);
   } else if (func === 0x05){
     if (curMode !== 'dual'){ curMode='dual'; $('modeText').textContent='双机'; }
+    // 收集本帧所有原始点
+    const rawM = [], rawS = [];
     for (let i=4; i<FRAME_LEN; i+=6){
-      const main = decodePoint(frame[i],   frame[i+1], frame[i+2]);
-      const sub  = decodePoint(frame[i+3], frame[i+4], frame[i+5]);
-      if (main !== null && sub !== null) pushSample(main, sub, main+sub, true);
+      const m = decodePoint(frame[i],   frame[i+1], frame[i+2]);
+      const s = decodePoint(frame[i+3], frame[i+4], frame[i+5]);
+      if (m !== null && s !== null){ rawM.push(m); rawS.push(s); }
+    }
+    if (rawM.length === 0) return;
+    // 批量 Hampel 清洗（主/副各自独立）
+    const cleanM = hpOn ? (ensureHP(), hpMain.filter(rawM)) : rawM;
+    const cleanS = hpOn ? (ensureHP(), hpSub.filter(rawS))  : rawS;
+    for (let i=0; i<cleanM.length; i++){
+      pushSample(cleanM[i], cleanS[i], cleanM[i] + cleanS[i], true);
     }
   }
 }
@@ -561,76 +606,92 @@ class FilterChain {
 
 function ensureFilter(){
   if (!filterOn) return;
-  if (!filtMain || filtMain.fc!==filtFc || filtMain.order!==filtOrder){
+  if (!filtMain || filtMain.fc!==filtFc || filtMain.order!==filtOrder || filtMain.fs!==FS){
     filtMain = new FilterChain(FS, filtFc, filtOrder);
     filtSub  = new FilterChain(FS, filtFc, filtOrder);
   }
 }
 function resetFilter(){ if (filtMain){ filtMain.reset(); filtSub.reset(); } }
 
-// ===================== Hampel 实时尖峰过滤 =====================
-// 用环形窗口缓存 radius 个点后，对中间点做中位数 + MAD 离群检测；
-// 尖峰用窗口中位数替换。延迟 = radius / 1000 秒（radius=10 → 10ms），人眼无感。
-class HampelFilter {
-  constructor(radius = 10, sigma = 6.0, minDeviation = 2.0) {
+// ===================== Hampel 尖峰清洗 =====================
+// 局部中位数与 MAD 自适应阈值，尖峰用两侧最近正常值的均值替换
+class HampelCleaner {
+  constructor(radius = 10, sigma = 6, minDeviation = 2) {
     this.radius = radius;
     this.sigma = sigma;
     this.minDeviation = minDeviation;
-    this._buf = [];   // 环形缓冲（保持 windowSize 个点）
-    this._heated = false; // 是否已预热满窗
+    this.reset();
   }
 
-  get windowSize() { return this.radius * 2 + 1; }
+  median(values) {
+    const sorted = values.slice().sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    return sorted.length % 2 ? sorted[middle] : (sorted[middle - 1] + sorted[middle]) / 2;
+  }
 
-  filter(value) {
-    this._buf.push(value);
-    // 前 windowSize 个点直接输出原始值，同时累积缓冲
-    if (this._buf.length < this.windowSize) {
-      return value;
+  filter(values) {
+    const source = this.history.concat(values);
+    const offset = this.history.length;
+    const cleaned = new Array(values.length);
+    const isSpike = new Array(source.length).fill(false);
+    const medians = new Array(source.length);
+
+    for (let index = 0; index < source.length; index++) {
+      const window = source.slice(Math.max(0, index - this.radius), Math.min(source.length, index + this.radius + 1));
+      const median = this.median(window);
+      const mad = this.median(window.map(item => Math.abs(item - median)));
+      const threshold = Math.max(this.minDeviation, this.sigma * 1.4826 * mad);
+      medians[index] = median;
+      isSpike[index] = Math.abs(source[index] - median) > threshold;
     }
-    this._heated = true;
 
-    const midIdx = this.radius;
-    const midVal = this._buf[midIdx];
+    for (let i = 0; i < values.length; i++) {
+      const index = offset + i;
+      if (!isSpike[index]) {
+        cleaned[i] = values[i];
+        continue;
+      }
 
-    // 计算窗口的中位数
-    const sorted = [...this._buf].sort((a, b) => a - b);
-    const median = sorted[this.radius];  // 排序后中间位置的元素
+      let leftIndex = index - 1;
+      while (leftIndex >= 0 && isSpike[leftIndex]) leftIndex--;
 
-    // 计算 MAD（Median Absolute Deviation）
-    const absDevs = this._buf.map(v => Math.abs(v - median)).sort((a, b) => a - b);
-    const mad = absDevs[this.radius];
+      let rightIndex = index + 1;
+      while (rightIndex < source.length && isSpike[rightIndex]) rightIndex++;
 
-    // 自适应阈值：max(最小幅度, sigma × 1.4826 × MAD)
-    const threshold = Math.max(this.minDeviation, this.sigma * 1.4826 * mad);
+      const leftValue = leftIndex >= 0 ? source[leftIndex] : null;
+      const rightValue = rightIndex < source.length ? source[rightIndex] : null;
+      if (leftValue !== null && rightValue !== null) {
+        cleaned[i] = (leftValue + rightValue) / 2;
+      } else if (leftValue !== null) {
+        cleaned[i] = leftValue;
+      } else if (rightValue !== null) {
+        cleaned[i] = rightValue;
+      } else {
+        cleaned[i] = medians[index];
+      }
+    }
 
-    const cleaned = Math.abs(midVal - median) > threshold ? median : midVal;
-
-    // 丢掉最老的点，维持窗口大小
-    this._buf.shift();
-
+    this.history = source.slice(-this.radius);
     return cleaned;
   }
 
-  reset() { this._buf = []; this._heated = false; }
+  reset() {
+    this.history = [];
+  }
 }
+
 function ensureHP(){
   if (!hpOn) return;
   if (!hpMain || hpMain.radius!==hpRadius || hpMain.sigma!==hpSigma || hpMain.minDeviation!==hpMinDev){
-    hpMain = new HampelFilter(hpRadius, hpSigma, hpMinDev);
-    hpSub  = new HampelFilter(hpRadius, hpSigma, hpMinDev);
+    hpMain = new HampelCleaner(hpRadius, hpSigma, hpMinDev);
+    hpSub  = new HampelCleaner(hpRadius, hpSigma, hpMinDev);
   }
 }
 function resetHP(){ if (hpMain){ hpMain.reset(); hpSub.reset(); } }
 
 function pushSample(main, sub, comb, isDual){
-  // 数据清洗管线：原始 → Hampel 尖峰过滤（中位数替换） → 巴特沃斯低通（平滑）
+  // 数据清洗管线：Hampel 尖峰过滤已在 processFrame 批量完成 → 巴特沃斯低通（平滑）
   let dMain=main, dSub=sub;
-  if (hpOn){
-    ensureHP();
-    dMain = hpMain.filter(dMain);
-    dSub  = hpSub.filter(dSub);
-  }
   if (filterOn){
     ensureFilter();
     dMain = filtMain.process(dMain);
@@ -649,8 +710,22 @@ function pushSample(main, sub, comb, isDual){
   ringMain[ringHead] = dMain;
   ringSub[ringHead]  = dSub;
   ringComb[ringHead] = dComb;
+
+  // 窗口均值：增量更新（避免 updateUI 遍历 3000 点）
+  if (ringFilled < MAXPTS){
+    avgMainSum += dMain;
+    avgCombSum += dComb;
+  } else {
+    avgMainSum += dMain - ringMain[ringHead];   // 减去即将被覆盖的旧值
+    avgCombSum += dComb - ringComb[ringHead];
+  }
+
   ringHead = (ringHead + 1) % MAXPTS;
   if (ringFilled < MAXPTS){ ringFilled++; ringStartSample = globalSample - ringFilled + 1; }
+
+  // 图表范围增量更新（避免每帧 O(n) 遍历）
+  if (dComb < chartRangeMN) chartRangeMN = dComb;
+  if (dComb > chartRangeMX) chartRangeMX = dComb;
 
   // 统计（基于滤波值）
   session.count++;
@@ -666,6 +741,9 @@ function pushSample(main, sub, comb, isDual){
     $('recCount').textContent = recData.length;
   }
   globalSample++;
+
+  // 记录采样时间戳用于计算实际采样率
+  sampleTimeLog.push(performance.now());
 }
 
 // ===================== 界面更新 =====================
@@ -685,14 +763,28 @@ function updateUI(){
     const dur = (performance.now()-session.startMs)/1000;
     $('sDur').innerHTML = dur.toFixed(1)+'<small> s</small>';
   }
-  // 窗口均值
-  if (ringFilled>0){
-    let s=0; const arr = (chartSel==='dual'||curMode!=='dual') ? ringComb : ringComb;
-    const useArr = curMode==='dual' ? ringComb : ringMain;
-    for (let i=0;i<ringFilled;i++){
-      const idx=(ringHead - ringFilled + i + MAXPTS*2)%MAXPTS;
-      s += useArr[idx];
+
+  // 计算实际采样率（每秒更新一次）
+  const now = performance.now();
+  // 始终清理过期时间戳（滑动窗口）
+  while (sampleTimeLog.length > 0 && now - sampleTimeLog[0] > 1000) sampleTimeLog.shift();
+  if (now - lastRateUpdate > 1000){
+    lastRateUpdate = now;
+    if (sampleTimeLog.length >= 10){
+      const dur = (now - sampleTimeLog[0]) / 1000;
+      actualFS = Math.round(sampleTimeLog.length / dur);
+      $('sampleRate').textContent = actualFS;
+      // 采样率变化超过 5% 时重建 Butterworth 滤波器
+      if (Math.abs(FS - actualFS) > FS * 0.05 && actualFS > 0){
+        FS = actualFS;
+        if (filterOn){ ensureFilter(); resetFilter(); }
+      }
     }
+  }
+
+  // 窗口均值（增量 O(1)，不再遍历 3000 点）
+  if (ringFilled>0){
+    const s = curMode==='dual' ? avgCombSum : avgMainSum;
     $('sAvg').innerHTML = (s/ringFilled).toFixed(2)+'<small> kg</small>';
   }
 }
@@ -721,7 +813,7 @@ function drawChart(){
   ctx.strokeStyle = '#eef2f7'; ctx.lineWidth = 1;
   for (let i=0;i<=4;i++){ const y=ch*i/4; ctx.beginPath(); ctx.moveTo(0,y); ctx.lineTo(cw,y); ctx.stroke(); }
 
-  if (ringFilled < 2){ requestAnimationFrame(loop); return; }
+  if (ringFilled < 2) return;
 
   // 选择序列
   let series=[];
@@ -733,16 +825,30 @@ function drawChart(){
     series = [ {arr: ringFilled? (curMode==='dual'?ringComb:ringMain) : ringMain, color:'#2563eb', w:2.4, label:'重量'} ];
   }
 
-  // 计算范围
-  let mn=Infinity, mx=-Infinity;
-  for (const s of series){
+  // 每 30 帧重算一次图表范围（约 0.5s），其余帧使用增量缓存
+  chartRangeFrames++;
+  let mn = chartRangeMN, mx = chartRangeMX;
+  if (chartRangeFrames >= 10 || !isFinite(mn) || mn === mx) {  // 10帧≈0.5s @20fps
+    mn=Infinity; mx=-Infinity;
+    const arr = (curMode==='dual' && chartSel==='dual') ? ringComb : (curMode==='dual'?ringComb:ringMain);
     for (let i=0;i<ringFilled;i++){
       const idx=(ringHead - ringFilled + i + MAXPTS*2)%MAXPTS;
-      const v=s.arr[idx];
+      const v = arr[idx];
       if (v<mn) mn=v; if (v>mx) mx=v;
     }
+    if (curMode==='dual' && chartSel==='dual'){
+      for (let i=0;i<ringFilled;i++){
+        const idx=(ringHead - ringFilled + i + MAXPTS*2)%MAXPTS;
+        const v=ringMain[idx]; if (v<mn) mn=v; if (v>mx) mx=v;
+      }
+      for (let i=0;i<ringFilled;i++){
+        const idx=(ringHead - ringFilled + i + MAXPTS*2)%MAXPTS;
+        const v=ringSub[idx]; if (v<mn) mn=v; if (v>mx) mx=v;
+      }
+    }
+    chartRangeMN=mn; chartRangeMX=mx; chartRangeFrames=0;
   }
-  if (!isFinite(mn)){ requestAnimationFrame(loop); return; }
+  if (!isFinite(mn)) return;
   if (mn===mx){ mn-=1; mx+=1; }
   if (mn>0) mn=0; if (mx<0) mx=0;            // 始终包含 0 线
   const pad=(mx-mn)*0.12; mn-=pad; mx+=pad;
@@ -773,13 +879,13 @@ function drawChart(){
   ctx.fillText(mx.toFixed(1)+' kg', 4, 12);
   ctx.fillText(mn.toFixed(1)+' kg', 4, ch-4);
   ctx.fillText('窗口 '+ (ringFilled/1000).toFixed(2) +' s', cw-90, 12);
-  requestAnimationFrame(loop);
 }
 
-let lastUI=0;
+let lastUI=0, lastDraw=0;
 function loop(ts){
   if (ts - lastUI > 60){ updateUI(); lastUI=ts; }
-  drawChart();
+  if (showChart && ts - lastDraw > 50){ drawChart(); lastDraw=ts; }  // ~20fps，隐藏时跳过绘制
+  requestAnimationFrame(loop);
 }
 
 // ===================== 录制 =====================
@@ -829,7 +935,7 @@ $('btnRestDef').onclick = ()=>{ writeCmd([0x54,0xF8]); log('已发送：恢复�
 $('btnZero').onclick = ()=>{
   if (zeroOn){
     zeroOn=false; zeroMain=0; zeroSub=0;
-    $('btnZero').textContent='归零（去皮）';
+    $('btnZero').textContent='归零';
     log('已取消归零。','i');
   } else {
     zeroMain = session.lastMain; zeroSub = session.lastSub; zeroOn=true;
@@ -904,6 +1010,10 @@ document.querySelectorAll('#chartMode button').forEach(b=>{
     b.classList.add('active'); chartSel=b.dataset.m;
   };
 });
+$('showChart').onchange = ()=>{
+  showChart = $('showChart').checked;
+  document.querySelector('.chart-wrap').classList.toggle('hidden', !showChart);
+};
 
 // 初始化
 updateFiltStatus();
