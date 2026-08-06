@@ -83,7 +83,11 @@
 
 ![端子1](pic/接线端子.png)
 
-### 2.9 双头Type-C数据线1根
+### 2.9 屏蔽胶带铝箔胶带
+
+[【淘宝】宽50MM*20米足长](https://e.tb.cn/h.RVo3PtKf2AzqXts?tk=mpx05vANGBk) 
+
+### 2.10 双头Type-C数据线1根
 
 [【淘宝】双Type-C数据线](https://e.tb.cn/h.iOpiUHw1WF56L72?tk=ZHzF54ZzYl2) 
 
@@ -91,15 +95,15 @@
 
 > 用来连接两个测力台，只有一个测力台可不用数据线。
 
-### 2.10 屏蔽胶带铝箔胶带
+### 2.11 充电器（可选）
 
-[【淘宝】宽50MM*20米足长](https://e.tb.cn/h.RVo3PtKf2AzqXts?tk=mpx05vANGBk) 
+[【淘宝】PD5V1A慢充头 C口](https://e.tb.cn/h.8URQUFbLXy8JXVJ?tk=6W0ngBd6Cdv) 
 
 ---
 
 ## 3 装配
 ### 3.1 传感器剥线
-用鸭嘴剥线钳将所有测力传感器的四根线末端剥出约1cm长的金属线.
+用鸭嘴钳将所有测力传感器的四根线末端剥出约1cm长的金属线.
 <p align="center">
   <img src="pic/剥线.jpg" alt="剥线" width="300" />
 </p>
@@ -123,12 +127,13 @@
 </p>
 
 秤脚加上螺母扣拧到传感器上。
+
 <p align="center">
   <img src="pic/秤脚安装.jpg" alt="RexForce 主板示意图" width="500" />
 </p>
 
 ### 3.3 装钢板
-四个传感器用螺丝拧到钢板四个角，然后将主机固定到钢板底部边缘。
+用螺丝把四个传感器拧到钢板四角，然后将主机固定到钢板底部边缘。
 
 > 
 <p align="center">
