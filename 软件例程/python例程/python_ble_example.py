@@ -92,6 +92,10 @@ class BLESensorApp:
         self.last_print_time  = time.time()
         self.freq_print_running = False
 
+        # 丢帧检测（基于帧头时间戳，单位 ms：单机帧间隔 80 / 双机 40）
+        self._last_frame_ts = None
+        self._drop_count    = 0
+
         # 图表
         self.chart_max_points = 10000
         self.chart_data_x = deque(maxlen=self.chart_max_points)
@@ -423,6 +427,16 @@ class BLESensorApp:
                 self.running  = True
                 self.scanning = False
 
+                # 打印 MTU：若 < 244 则每帧要分片多个连接事件，是吞吐瓶颈的重要线索
+                try:
+                    mtu = client.mtu_size
+                except Exception:
+                    mtu = None
+                try:
+                    print(f"MTU size: {mtu if mtu is not None else 'unknown'}")
+                except Exception:
+                    pass
+
                 # 重置状态
                 self.data_buffer = bytearray()
                 self.resp_buffer = bytearray()
@@ -433,6 +447,8 @@ class BLESensorApp:
                 self.data_count = 0
                 self.last_print_time = time.time()
                 self.current_frequency_hz = None
+                self._last_frame_ts = None
+                self._drop_count = 0
                 self.data_sequence = 0
                 with self.data_lock:
                     self.chart_data_x.clear()
@@ -743,8 +759,9 @@ class BLESensorApp:
                     freq = self.data_count / elapsed
                     self.current_frequency_hz = freq
                     self.root.after(0, lambda f=freq: self.freq_label.config(text=f"采集频率：{f:.2f} Hz"))
-                    print(f"采集频率: {freq:.2f} Hz (共 {self.data_count} 个数据点)")
+                    print(f"采集频率: {freq:.2f} Hz (共 {self.data_count} 个数据点) 丢帧:{self._drop_count}")
                     self.data_count = 0
+                    self._drop_count = 0
                     self.last_print_time = now
 
     # ═══════════════════════════════════════════════════════ 数据解析
@@ -804,6 +821,18 @@ class BLESensorApp:
             self.data_buffer = self.data_buffer[FRAME_LEN:]
 
             is_mixed = (frame[1] == MODBUS_FUNC_MIXED)
+
+            # 帧头时间戳丢帧检测：dt 超过约 1.5 倍正常帧间隔即计一帧丢失
+            ts = (frame[2] << 8) | frame[3]
+            if self._last_frame_ts is not None:
+                dt = ts - self._last_frame_ts
+                if dt < 0:
+                    dt += 65535
+                dt_thr = 60 if is_mixed else 120
+                if dt > dt_thr:
+                    self._drop_count += 1
+            self._last_frame_ts = ts
+
             with self.data_lock:
                 self.is_dual_mode = is_mixed
 
