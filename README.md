@@ -15,7 +15,7 @@
 10. [主板尺寸图](#10-主板尺寸图)
 11. [应用程序](#11-应用程序)
 12. [示例：测力台采购组装教程](测力台采购装配/README.md)
-13. [成品测力台、测力计购买](#13-成品购买)
+13. [成品测力台、测力计购买](#13-成品测力台测力计购买)
 ---
 
 ## 1. 设备概述
@@ -448,9 +448,6 @@ import struct
 # 恢复默认比例系数
 await client.write_gatt_char(RX_UUID, bytes([0x54, 0xF8]))
 
-# 保存当前比例系数为默认值
-await client.write_gatt_char(RX_UUID, bytes([0x54, 0xCC]))
-
 # 请求温度原始值
 await client.write_gatt_char(RX_UUID, bytes([0x54, 0xDD]))
 
@@ -539,7 +536,7 @@ await client.write_gatt_char(RX_UUID, cmd)
 
 ---
 
-## 13. 成品测力台、测力计购买
+## 13. 成品测力台测力计购买
 ### 13.1 测力台
 <p align="center">
   <img src="./pic/测力台购买.jpg"  width="300" />
