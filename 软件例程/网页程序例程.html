@@ -95,12 +95,15 @@
     <div class="row" style="justify-content:space-between">
       <div>
         <h1>RexForce 测力台 · Web BLE 客户端</h1>
-        <div class="sub">纯网页实现 · Web Bluetooth API · 支持手机、平板、电脑浏览器（IOS所有浏览器均不支持，见下方说明）</div>
+        <div class="sub">纯网页实现 · Web Bluetooth + Web Serial · 支持手机、平板、电脑浏览器（IOS所有浏览器均不支持，见下方说明）</div>
       </div>
       <div class="row">
         <span id="stateBadge" class="badge off"><span class="dot"></span><span id="stateText">未连接</span></span>
-        <button id="btnConnect" class="primary">连接设备</button>
-        <button id="btnDisconnect" class="warn">断开</button>
+        <button id="btnConnect" class="primary">连接蓝牙</button>
+        <button id="btnDisconnect" class="warn">断开蓝牙</button>
+        <span style="width:1px;height:24px;background:var(--line);margin:0 2px"></span>
+        <button id="btnSerialMain">主串口</button>
+        <button id="btnSerialSub">副串口</button>
       </div>
     </div>
     <div class="row" style="margin-top:10px">
@@ -261,6 +264,7 @@
         <p>3. 点击「连接设备」后在系统弹窗中选择 <code>Force-XXXX</code> 设备；连接后设备立即推送数据，LED 转为常亮。</p>
         <p>4. 协议：服务 <code>0000FFE5…</code>，TX(Notify) <code>0000FFE4…</code>，RX(Write) <code>0000FFE9…</code>；每帧固定 244 字节，单帧含 80 点（单机）或 40 组（双机），每点 3 字节含校验和，校验失败自动丢弃。</p>
         <p>5. 建议连接后设备 MTU ≥ 244（默认 400）。</p>
+        <p>6. <b>串口模式（CH340K）：</b>支持双串口同时采集（主设备 + 副设备）。点击「主串口」「副串口」分别选择 USB 串口设备；设备端每次读到重量即发一帧 3 字节（2 字节大端有符号 + 校验和），原始频率约 1900Hz。系统以固定 1000Hz 从各串口缓存取最新值采样（每毫秒取主/副各一个值，丢弃冗余缓存），图表与录制均以 1000Hz 输出，录制时间戳从 0ms 开始累加。检测到串口数据后自动断开蓝牙并禁用蓝牙连接，全部串口断开后恢复。双串口同时连接时自动切换为主/副/合力显示模式。</p>
       </div>
     </details>
   </div>
@@ -324,6 +328,17 @@ let zeroOn = false, zeroMain = 0, zeroSub = 0;
 let chartSel='weight';   // 'weight' | 'dual'
 let showChart = true;
 
+// 串口通信（Web Serial API · CH340K）— 支持双串口（主 + 副）
+const serial = {
+  main: { port:null, reader:null, active:false, started:false, buf:new Uint8Array(0), clean:0, timeLog:[], cache:[] },
+  sub:  { port:null, reader:null, active:false, started:false, buf:new Uint8Array(0), clean:0, timeLog:[], cache:[] },
+};
+let dataSource = null;          // 'ble' | 'serial' | null
+let sampleTimer = null;         // 1000Hz 采样触发定时器（触发后按 1ms 网格补齐样本）
+let serialStartTime = 0;        // 1000Hz 采样网格起点（performance.now()）
+let lastSampleIdx = 0;          // 已输出的最后一个网格序号
+let recUnit = 's';              // 录制时间戳单位：'ms'（串口）| 's'（蓝牙）
+
 // ===================== DOM =====================
 const $ = id => document.getElementById(id);
 const logEl = $('log');
@@ -380,6 +395,7 @@ async function connectServices(){
 // 连接成功后的 UI / 状态初始化（connect 与自动重连共用）
 function finishConnect(){
   connected = true;
+  dataSource = 'ble';
   curMode='unknown'; globalSample=0; rxBuffer=new Uint8Array(0);
   lastTs=-1; dropCount=0;
   ringHead=0; ringFilled=0; avgMainSum=0; avgCombSum=0; chartRangeMN=Infinity; chartRangeMX=-Infinity; chartRangeFrames=10;
@@ -396,6 +412,7 @@ function finishConnect(){
 
 async function connect(){
   if (!checkSupport()) return;
+  if (dataSource === 'serial'){ log('串口通信进行中，已禁用蓝牙连接。请先断开串口。','e'); return; }
   try {
     log('正在请求设备（请在弹窗中选择 Force-XXXX）…','i');
     device = await navigator.bluetooth.requestDevice({
@@ -419,8 +436,11 @@ async function connect(){
 function onDisconnected(){
   // 正在建连过程中的内部断连事件（connectServices 的重试清理）忽略，交给重试逻辑处理
   if (connecting) return;
+  // 串口已接管时，蓝牙断连事件不清理串口状态
+  if (dataSource === 'serial') return;
   if (rxChar) try{ rxChar.removeEventListener('characteristicvaluechanged', onNotify); }catch(_){}
   connected=false;
+  dataSource = null;
   zeroOn=false; zeroMain=0; zeroSub=0; $('btnZero').textContent='归零';
   sampleTimeLog=[]; actualFS=0; $('sampleRate').textContent='—';
   setState('off','已断开');
@@ -449,6 +469,7 @@ async function autoReconnect(){
 }
 
 function disconnect(){
+  if (dataSource === 'serial') return;  // 串口模式下不响应蓝牙断开
   manualDisconnect = true;
   autoReconnectTries = MAX_AUTO_RECONNECT; // 阻止自动重连
   if (rxChar) try{ rxChar.removeEventListener('characteristicvaluechanged', onNotify); }catch(_){}
@@ -459,6 +480,7 @@ function disconnect(){
     }catch(_){}
   }
   connected = false;
+  if (dataSource === 'ble') dataSource = null;
   zeroOn = false; zeroMain = 0; zeroSub = 0; $('btnZero').textContent = '归零';
   sampleTimeLog = []; actualFS = 0; $('sampleRate').textContent = '—';
   setState('off', '已断开');
@@ -471,6 +493,243 @@ async function writeCmd(bytes){
   if (!connected || !rxChar) { log('未连接，无法发送指令。','e'); return; }
   try { await rxChar.writeValue(new Uint8Array(bytes)); }
   catch(e){ log('发送指令失败：' + e.message,'e'); }
+}
+
+// ===================== Web Serial（CH340K）=====================
+function checkSerialSupport(){
+  if (!navigator.serial){ log('当前浏览器不支持 Web Serial API（需 Chrome/Edge 87+）。','e'); return false; }
+  if (!window.isSecureContext){ log('非安全上下文，Web Serial 不可用。','e'); return false; }
+  return true;
+}
+
+async function serialConnect(role){
+  if (!checkSerialSupport()) return;
+  const s = serial[role], name = role==='main'?'主':'副';
+  try {
+    log('正在请求'+name+'设备串口（请在弹窗中选择 CH340K 设备）…','i');
+    s.port = await navigator.serial.requestPort();
+    // 如果端口仍处于打开状态（上次断开未完全清理），先关闭再重新打开
+    try { await s.port.open({ baudRate: 921600 }); }
+    catch(openErr){
+      if (openErr.message && openErr.message.includes('already open')){
+        log(name+'串口仍在打开状态，尝试强制关闭后重连…','i');
+        try {
+          if (s.port.readable && s.port.readable.locked){
+            const r = s.port.readable.getReader(); r.releaseLock();
+          }
+          await s.port.close();
+          await new Promise(r=>setTimeout(r, 200));
+          await s.port.open({ baudRate: 921600 });
+        } catch(e2){
+          throw e2;
+        }
+      } else {
+        throw openErr;
+      }
+    }
+    s.active = true;
+    const btn = role==='main'?'btnSerialMain':'btnSerialSub';
+    $(btn).textContent = '断开'+name+'串口';
+    $(btn).classList.add('warn');
+    log(name+'串口已打开（921600），等待数据…','ok');
+    readSerialLoop(role);
+  } catch(e){
+    log(name+'串口连接失败：'+e.message,'e');
+    s.port = null;
+  }
+}
+
+async function readSerialLoop(role){
+  const s = serial[role], name = role==='main'?'主':'副';
+  while (s.port && s.port.readable && s.active){
+    try {
+      const reader = s.port.readable.getReader();
+      s.reader = reader;
+      while (true){
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (value && value.length > 0) onSerialData(value, role);
+      }
+      // serialDisconnect 可能已释放锁，先检查再释放
+      try { if (s.port && s.port.readable && s.port.readable.locked) reader.releaseLock(); } catch(_){}
+      if (s.reader === reader) s.reader = null;
+    } catch(e){
+      if (s.active) log(name+'串口读取中断：'+e.message,'e');
+      try { if (s.port && s.port.readable && s.port.readable.locked) reader.releaseLock(); } catch(_){}
+      break;
+    }
+  }
+  // 仅当循环意外退出且用户未主动断开时才自动清理
+  if (s.active) await serialDisconnect(role);
+}
+
+// 1000Hz 网格采样回调：无论定时器实际触发频率，输出严格按 1ms 网格补齐
+function takeLatest(cache, t, fallback){
+  let v = fallback;
+  for (const e of cache){
+    if (e.t <= t) v = e.v; else break;
+  }
+  return v;
+}
+function sampleTick(){
+  const now = performance.now();
+  const targetIdx = Math.floor(now - serialStartTime);  // 应输出到的网格序号（1ms 一格）
+  if (targetIdx <= lastSampleIdx) return;
+  for (let idx = lastSampleIdx + 1; idx <= targetIdx; idx++){
+    const t = serialStartTime + idx;
+    const mVal = takeLatest(serial.main.cache, t, serial.main.clean);
+    const sVal = takeLatest(serial.sub.cache,  t, serial.sub.clean);
+    const isDual = serial.main.started && serial.sub.started;
+    if (isDual) pushSample(mVal, sVal, mVal + sVal, true);
+    else { const val = serial.main.started ? mVal : sVal; pushSample(val, 0, val, false); }
+  }
+  lastSampleIdx = targetIdx;
+}
+
+// 首次收到任意串口数据时：断开蓝牙、切换数据源
+function serialStart(){
+  if (dataSource === 'ble' && connected){
+    log('检测到串口数据，自动断开蓝牙…','i');
+    disconnect();
+  }
+  dataSource = 'serial';
+  connected = true;
+  curMode = 'single'; globalSample = 0;
+  serial.main.buf = new Uint8Array(0); serial.sub.buf = new Uint8Array(0);
+  serial.main.timeLog = []; serial.sub.timeLog = [];
+  serial.main.cache = []; serial.sub.cache = [];
+  // 1000Hz 采样网格起点（输出样本严格按 1ms 网格均匀分布）
+  serialStartTime = performance.now();
+  lastSampleIdx = 0;
+  // 启动采样定时器（触发后按网格补齐，实际频率不足也能保证输出均匀）
+  if (sampleTimer){ clearInterval(sampleTimer); }
+  sampleTimer = setInterval(sampleTick, 1);
+  lastTs = -1; dropCount = 0;
+  ringHead = 0; ringFilled = 0; avgMainSum = 0; avgCombSum = 0;
+  chartRangeMN = Infinity; chartRangeMX = -Infinity; chartRangeFrames = 10;
+  sampleTimeLog = []; actualFS = 0; FS = 1000; lastRateUpdate = 0;
+  session = { peakP:-Infinity, peakN:Infinity, count:0, startMs:performance.now(), lastMain:0, lastSub:0, lastComb:0 };
+  $('devName').textContent = 'CH340K 串口';
+  setState('on','串口已连接');
+  if (filterOn){ ensureFilter(); resetFilter(); }
+  if (hpOn){ ensureHP(); resetHP(); }
+  $('btnConnect').disabled = true;
+  $('btnCal').disabled = true;
+  $('btnRestDef').disabled = true;
+  $('btnReadTemp').disabled = true;
+  $('btnRec').disabled = false;
+  $('btnZero').disabled = false;
+  log('串口数据已接入，蓝牙已禁用。','ok');
+}
+
+function onSerialData(data, role){
+  const s = serial[role];
+  const otherKey = role==='main' ? 'sub' : 'main';
+  const other = serial[otherKey];
+
+  // 首次收到数据时初始化串口模式
+  if (!s.started){
+    if (!other.started) serialStart();
+    s.started = true;
+  }
+
+  // 拼接缓冲
+  const merged = new Uint8Array(s.buf.length + data.length);
+  merged.set(s.buf, 0); merged.set(data, s.buf.length);
+  s.buf = merged;
+
+  // 解析 3 字节帧：2 字节大端有符号 + 校验和
+  while (s.buf.length >= 3){
+    const hi = s.buf[0], lo = s.buf[1], ck = s.buf[2];
+    if (((hi + lo) & 0xFF) === ck){
+      let val = (hi << 8) | lo;
+      if (val >= 32768) val -= 65536;
+      const weight = val / 10.0;   // 0.1 kg 分辨率
+      // Hampel 清洗（主/副各自独立）
+      let clean;
+      if (hpOn){ ensureHP(); const hp = role==='main' ? hpMain : hpSub; clean = hp.filter([weight])[0]; }
+      else clean = weight;
+      s.clean = clean;
+      // 缓存带时间戳的最新值（按 1ms 网格取该时刻最新值）
+      s.cache.push({ t: performance.now(), v: clean });
+      if (s.cache.length > 64) s.cache.shift();
+      // 模式判断与显示（不再直接调 pushSample，由 1000Hz 定时器统一采样）
+      const isDual = serial.main.started && serial.sub.started;
+      if (isDual){
+        if (curMode !== 'dual'){ curMode='dual'; $('modeText').textContent='串口·双机'; $('devName').textContent='CH340K 双串口'; }
+      } else {
+        if (curMode !== 'single'){ curMode='single'; }
+        $('modeText').textContent = '串口·' + (role==='main'?'主':'副');
+      }
+      s.buf = s.buf.slice(3);
+      // 记录该串口设备的采样时间戳（双串口时分别统计，不再相加）
+      s.timeLog.push(performance.now());
+    } else {
+      s.buf = s.buf.slice(1);
+      dropCount++;
+    }
+  }
+  // 数据到达即检查 1000Hz 网格（串口 ~1900Hz > 1000Hz，等效于忙等采样节拍，输出延迟最小）
+  sampleTick();
+  $('sDrop').textContent = dropCount;
+}
+
+async function serialDisconnect(role){
+  const s = serial[role], name = role==='main'?'主':'副';
+  s.active = false;
+  s.started = false;
+
+  // 1. 先取消 reader（让 readSerialLoop 退出并 releaseLock）
+  if (s.reader){
+    try { await s.reader.cancel(); } catch(_){}
+    try { s.reader.releaseLock(); } catch(_){}
+    s.reader = null;
+  }
+
+  // 2. 等待端口可关闭后关闭
+  if (s.port){
+    try {
+      if (s.port.readable && s.port.readable.locked){
+        try { s.port.readable.getReader().releaseLock(); } catch(_){}
+      }
+      await s.port.close();
+    } catch(_){}
+    s.port = null;
+  }
+
+  s.buf = new Uint8Array(0);
+  s.clean = 0;
+  s.timeLog = [];
+  s.cache = [];
+
+  const btn = role==='main'?'btnSerialMain':'btnSerialSub';
+  $(btn).textContent = name+'串口';
+  $(btn).classList.remove('warn');
+
+  const other = serial[role==='main' ? 'sub' : 'main'];
+  if (!other.active){
+    // 两路串口均已断开 → 停止定时器并完整清理
+    if (sampleTimer){ clearInterval(sampleTimer); sampleTimer = null; }
+    if (dataSource === 'serial'){
+      connected = false;
+      dataSource = null;
+      zeroOn = false; zeroMain = 0; zeroSub = 0; $('btnZero').textContent = '归零';
+      sampleTimeLog = []; actualFS = 0; $('sampleRate').textContent = '—';
+      setState('off','已断开');
+      $('btnConnect').disabled = false;
+      ['btnCal','btnRestDef','btnReadTemp','btnRec','btnZero'].forEach(id=>$(id).disabled=true);
+      if (recording) stopRec();
+    }
+    log('串口已全部断开。','e');
+  } else {
+    // 仅一路断开，切回单机模式
+    if (curMode === 'dual'){
+      curMode = 'single';
+      $('modeText').textContent = '串口·' + (other===serial.main ? '主' : '副');
+      $('devName').textContent = 'CH340K 串口';
+    }
+    log(name+'串口已断开。','e');
+  }
 }
 
 // ===================== 数据接收与解析 =====================
@@ -520,10 +779,11 @@ function decodePoint(high, low, checksum){
 function processFrame(frame){
   const func = frame[1];
   const ts = (frame[2] << 8) | frame[3];
-  // 帧间隔检测（约 80ms），用于粗略丢帧统计
+  // 帧间隔检测：单机 80ms / 双机 40ms；dt 超过约 1.5 倍正常间隔即判丢帧（丢 1 帧即报）
   if (lastTs >= 0){
     let dt = ts - lastTs; if (dt < 0) dt += 65535;
-    if (dt > 200) dropCount++; // 跳变过大，疑似丢帧
+    const dtThr = (func === 0x05) ? 60 : 120;
+    if (dt > dtThr) dropCount++;
   }
   lastTs = ts;
 
@@ -736,14 +996,15 @@ function pushSample(main, sub, comb, isDual){
 
   // 录制（原始 + 滤波）
   if (recording){
-    recData.push({ idx: globalSample, t: (globalSample)/1000, mode: isDual?'dual':'single',
+    const tVal = dataSource === 'serial' ? globalSample : (globalSample / 1000);
+    recData.push({ idx: globalSample, t: tVal, mode: isDual?'dual':'single',
       main, sub, comb, mainF: dMain, subF: dSub, combF: dComb });
     $('recCount').textContent = recData.length;
   }
   globalSample++;
 
-  // 记录采样时间戳用于计算实际采样率
-  sampleTimeLog.push(performance.now());
+  // 记录采样时间戳（串口模式由各设备在 onSerialData 单独统计）
+  if (dataSource !== 'serial') sampleTimeLog.push(performance.now());
 }
 
 // ===================== 界面更新 =====================
@@ -766,18 +1027,45 @@ function updateUI(){
 
   // 计算实际采样率（每秒更新一次）
   const now = performance.now();
-  // 始终清理过期时间戳（滑动窗口）
-  while (sampleTimeLog.length > 0 && now - sampleTimeLog[0] > 1000) sampleTimeLog.shift();
-  if (now - lastRateUpdate > 1000){
-    lastRateUpdate = now;
-    if (sampleTimeLog.length >= 10){
-      const dur = (now - sampleTimeLog[0]) / 1000;
-      actualFS = Math.round(sampleTimeLog.length / dur);
-      $('sampleRate').textContent = actualFS;
-      // 采样率变化超过 5% 时重建 Butterworth 滤波器
-      if (Math.abs(FS - actualFS) > FS * 0.05 && actualFS > 0){
-        FS = actualFS;
+
+  if (dataSource === 'serial'){
+    // 串口模式：主/副设备分别统计各自采样率，双串口时不再相加
+    if (now - lastRateUpdate > 1000){
+      lastRateUpdate = now;
+      const calcFs = s => {
+        while (s.timeLog.length > 0 && now - s.timeLog[0] > 1000) s.timeLog.shift();
+        return s.timeLog.length >= 10 ? Math.round(s.timeLog.length / ((now - s.timeLog[0]) / 1000)) : 0;
+      };
+      const fsMain = serial.main.started ? calcFs(serial.main) : 0;
+      const fsSub  = serial.sub.started  ? calcFs(serial.sub)  : 0;
+      if (serial.main.started && serial.sub.started){
+        // 双串口：分别显示两个设备的采样率
+        $('sampleRate').textContent = '主 ' + (fsMain || '—') + ' · 副 ' + (fsSub || '—');
+      } else {
+        const fs = fsMain || fsSub;
+        if (fs > 0) $('sampleRate').textContent = fs;
+      }
+      // 滤波器参考频率（双串口以主设备频率为准）
+      const fsRef = fsMain || fsSub;
+      if (fsRef > 0 && Math.abs(FS - fsRef) > FS * 0.05){
+        FS = fsRef;
         if (filterOn){ ensureFilter(); resetFilter(); }
+      }
+    }
+  } else {
+    // BLE 模式：滑动窗口统计（原有逻辑不变）
+    while (sampleTimeLog.length > 0 && now - sampleTimeLog[0] > 1000) sampleTimeLog.shift();
+    if (now - lastRateUpdate > 1000){
+      lastRateUpdate = now;
+      if (sampleTimeLog.length >= 10){
+        const dur = (now - sampleTimeLog[0]) / 1000;
+        actualFS = Math.round(sampleTimeLog.length / dur);
+        $('sampleRate').textContent = actualFS;
+        // 采样率变化超过 5% 时重建 Butterworth 滤波器
+        if (Math.abs(FS - actualFS) > FS * 0.05 && actualFS > 0){
+          FS = actualFS;
+          if (filterOn){ ensureFilter(); resetFilter(); }
+        }
       }
     }
   }
@@ -891,6 +1179,7 @@ function loop(ts){
 // ===================== 录制 =====================
 function startRec(){
   recording=true; recData=[]; recStartSample=globalSample;
+  recUnit = dataSource === 'serial' ? 'ms' : 's';
   $('recState').textContent='录制中'; $('btnRec').textContent='停止录制';
   $('btnExport').disabled=false;
   log('开始录制数据。','ok');
@@ -903,7 +1192,8 @@ function stopRec(){
 }
 function exportCSV(){
   if (!recData.length){ log('没有可导出的数据。','e'); return; }
-  let csv='sample_index,time_s,mode,main_kg,sub_kg,combined_kg,main_filt_kg,sub_filt_kg,combined_filt_kg\n';
+  const tLabel = recUnit === 'ms' ? 'time_ms' : 'time_s';
+  let csv=`sample_index,${tLabel},mode,main_kg,sub_kg,combined_kg,main_filt_kg,sub_filt_kg,combined_filt_kg\n`;
   for (const r of recData){
     csv += `${r.idx},${r.t.toFixed(3)},${r.mode},${r.main.toFixed(3)},${r.sub.toFixed(3)},${r.comb.toFixed(3)},${r.mainF.toFixed(3)},${r.subF.toFixed(3)},${r.combF.toFixed(3)}\n`;
   }
@@ -918,6 +1208,14 @@ function exportCSV(){
 // ===================== 事件绑定 =====================
 $('btnConnect').onclick = connect;
 $('btnDisconnect').onclick = disconnect;
+$('btnSerialMain').onclick = async function(){
+  if (serial.main.active) await serialDisconnect('main');
+  else serialConnect('main');
+};
+$('btnSerialSub').onclick = async function(){
+  if (serial.sub.active) await serialDisconnect('sub');
+  else serialConnect('sub');
+};
 $('btnReset').onclick = ()=>{
   session.peakP=-Infinity; session.peakN=Infinity; session.count=0; session.startMs=performance.now();
   $('sPeakP').innerHTML='0.0<small> kg</small>'; $('sPeakN').innerHTML='0.0<small> kg</small>';
@@ -1017,9 +1315,16 @@ $('showChart').onchange = ()=>{
 
 // 初始化
 updateFiltStatus();
-if (!navigator.bluetooth) log('当前浏览器不支持 Web Bluetooth：iOS/iPadOS 的所有浏览器（含 Safari/Chrome/Edge）均不支持，请改用安卓或电脑的 Chrome·Edge，或用 BLE→WiFi 网关 / 微信小程序。','e');
-else if (!window.isSecureContext) log('警告：非安全上下文，Web Bluetooth 可能被禁用。','e');
-else log('就绪。点击「连接设备」开始。','ok');
+if (!navigator.bluetooth && !navigator.serial){
+  log('当前浏览器不支持 Web Bluetooth 和 Web Serial（iOS/iPadOS 全部不支持），请改用安卓或电脑的 Chrome·Edge。','e');
+} else {
+  if (!navigator.bluetooth) log('Web Bluetooth 不可用：iOS/iPadOS 所有浏览器均不支持。','e');
+  if (!navigator.serial) log('Web Serial 不可用：需 Chrome/Edge 87+。','e');
+  if (navigator.bluetooth && navigator.serial && window.isSecureContext)
+    log('就绪。可通过蓝牙或串口连接设备。','ok');
+  else if (!window.isSecureContext)
+    log('警告：非安全上下文，Web Bluetooth / Web Serial 可能被禁用。','e');
+}
 window.addEventListener('resize', setupCanvas);
 setupCanvas();
 requestAnimationFrame(loop);

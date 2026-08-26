@@ -99,6 +99,12 @@
 
 [【淘宝】PD5V1A慢充头 C口](https://e.tb.cn/h.8URQUFbLXy8JXVJ?tk=6W0ngBd6Cdv) 
 
+### 2.12 串口模块（可选）
+
+> 用于有线连接电脑使用，数据传输更稳定更快
+
+[【淘宝】串口模块rexforce测力台测力计有线连接电脑](https://e.tb.cn/h.89pQIGLGLaeGpYd?tk=PlstTWyI0Gy) 
+
 ---
 
 ## 3 装配
@@ -126,7 +132,7 @@
   <img src="pic/装壳.jpg" alt="RexForce 主板示意图" width="500" />
 </p>
 
-秤脚加上螺母扣拧到传感器上。
+秤脚加上盖子后，加螺母扣拧到传感器上。（图中为方便演示没加盖子）
 
 <p align="center">
   <img src="pic/秤脚安装.jpg" alt="RexForce 主板示意图" width="500" />
