@@ -2,6 +2,8 @@
 
 [点击这里查看RexForce主板开发说明文档](../README.md)
 
+[点击这里查看组装视频教程](https://www.bilibili.com/video/BV1iDtv6AEkH/?spm_id_from=333.1387.homepage.video_card.click&vd_source=62abb6fab9f91cdaa9f76e8942c84d40)
+
 <p align="center">
   <img src="pic/测力台.jpg" alt="RexForce 主板示意图" width="500" />
 </p>
