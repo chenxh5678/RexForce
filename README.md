@@ -540,8 +540,11 @@ await client.write_gatt_char(RX_UUID, cmd)
 ## 13. 成品测力台测力计购买
 ### 13.1 测力台
 >以下为第三方销售，不是开发者，请直接与他们联系
+
+[【淘宝】便携式测力台1000hz高频稳定采样](https://e.tb.cn/h.8IyaM3IQw8yUZtt?tk=KJogT8ycMCE) 
+
 <p align="center">
-  <img src="./pic/测力台购买.jpg"  width="300" />
+  <img src="./pic/测力台购买.png"  width="300" />
 </p>
 
 ### 13.2 测力计
@@ -554,4 +557,4 @@ await client.write_gatt_char(RX_UUID, cmd)
 
 ---
 
-_文档版本：2026-08-26_
+_文档版本：2026-09-16_
