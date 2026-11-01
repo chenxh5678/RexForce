@@ -173,6 +173,13 @@
   <!-- 控制 -->
   <div class="col-5 card">
     <h3 style="margin:0 0 8px">控制指令</h3>
+    <div class="row" style="justify-content:space-between; margin-bottom:8px">
+      <span class="note">发送通道：<code id="cmdChannelText">—</code></span>
+      <div class="seg" id="cmdTarget" style="display:none">
+        <button data-r="main" class="active">主串口</button>
+        <button data-r="sub">副串口</button>
+      </div>
+    </div>
     <details open>
       <summary>校准比例系数</summary>
       <div class="note" style="margin:6px 0">校准因子 = 当前测量值 ÷ 标准砝码值，放大 10000 倍后发送。</div>
@@ -265,6 +272,7 @@
         <p>4. 协议：服务 <code>0000FFE5…</code>，TX(Notify) <code>0000FFE4…</code>，RX(Write) <code>0000FFE9…</code>；每帧固定 244 字节，单帧含 80 点（单机）或 40 组（双机），每点 3 字节含校验和，校验失败自动丢弃。</p>
         <p>5. 建议连接后设备 MTU ≥ 244（默认 400）。</p>
         <p>6. <b>串口模式（CH340K）：</b>支持双串口同时采集（主设备 + 副设备）。点击「主串口」「副串口」分别选择 USB 串口设备；设备端每次读到重量即发一帧 3 字节（2 字节大端有符号 + 校验和），原始频率约 1900Hz。系统以固定 1000Hz 从各串口缓存取最新值采样（每毫秒取主/副各一个值，丢弃冗余缓存），图表与录制均以 1000Hz 输出，录制时间戳从 0ms 开始累加。检测到串口数据后自动断开蓝牙并禁用蓝牙连接，全部串口断开后恢复。双串口同时连接时自动切换为主/副/合力显示模式。</p>
+        <p>7. <b>串口模式下的控制指令：</b>与蓝牙完全同协议，同样支持「恢复默认比例系数」「发送校准因子」「请求温度原始值」，波特率 <code>921600</code>。设备只在完整发出一个重量点后处理指令，指令响应以整帧形式插在两个重量点之间（温度响应为 <code>0x54 0xDD</code> + 4 字节），本页解析时会自动识别并跳过，不计入丢帧。发送校准因子后新系数立即生效并持久化。双串口同时打开时，可在「控制指令」卡片右上角切换指令发往主串口或副串口。</p>
       </div>
     </details>
   </div>
@@ -338,6 +346,7 @@ let sampleTimer = null;         // 1000Hz 采样触发定时器（触发后按 1
 let serialStartTime = 0;        // 1000Hz 采样网格起点（performance.now()）
 let lastSampleIdx = 0;          // 已输出的最后一个网格序号
 let recUnit = 's';              // 录制时间戳单位：'ms'（串口）| 's'（蓝牙）
+let cmdSerialRole = 'main';     // 串口模式下指令优先发往的串口：'main' | 'sub'
 
 // ===================== DOM =====================
 const $ = id => document.getElementById(id);
@@ -407,6 +416,7 @@ function finishConnect(){
   if (hpOn){ ensureHP(); resetHP(); }                 // Hampel 尖峰过滤，连接时重建并清零
   $('btnConnect').disabled = true;
   ['btnCal','btnRestDef','btnReadTemp','btnRec','btnZero'].forEach(id=>$(id).disabled=false);
+  updateCmdChannelUI();
   log('已连接：' + (device.name||''),'ok');
 }
 
@@ -446,6 +456,7 @@ function onDisconnected(){
   setState('off','已断开');
   $('btnConnect').disabled=false;
   ['btnCal','btnRestDef','btnReadTemp','btnRec','btnZero'].forEach(id=>$(id).disabled=true);
+  updateCmdChannelUI();
   if (recording) stopRec();
   if (!manualDisconnect && device){
     if (autoReconnectTries < MAX_AUTO_RECONNECT){
@@ -486,13 +497,58 @@ function disconnect(){
   setState('off', '已断开');
   $('btnConnect').disabled = false;
   ['btnCal','btnRestDef','btnReadTemp','btnRec','btnZero'].forEach(id=>$(id).disabled=true);
+  updateCmdChannelUI();
   if (recording) stopRec();
 }
 
-async function writeCmd(bytes){
-  if (!connected || !rxChar) { log('未连接，无法发送指令。','e'); return; }
-  try { await rxChar.writeValue(new Uint8Array(bytes)); }
-  catch(e){ log('发送指令失败：' + e.message,'e'); }
+// 当前可用的指令通道：BLE 走 RX 特征；串口模式下按「主串口优先、其次副串口」选择
+function cmdChannel(){
+  if (dataSource === 'serial'){
+    if (cmdSerialRole === 'sub' && serial.sub.active) return { kind:'serial', role:'sub' };
+    if (serial.main.active) return { kind:'serial', role:'main' };
+    if (serial.sub.active)  return { kind:'serial', role:'sub' };
+    return null;
+  }
+  if (connected && rxChar) return { kind:'ble' };
+  return null;
+}
+function channelName(ch){
+  if (!ch) return '—';
+  return ch.kind === 'ble' ? 'BLE' : (ch.role === 'main' ? '主串口' : '副串口');
+}
+
+// 更新「发送通道」显示；双串口同时打开时才出现主/副切换
+function updateCmdChannelUI(){
+  const ch = cmdChannel();
+  $('cmdChannelText').textContent = channelName(ch);
+  const both = serial.main.active && serial.sub.active;
+  $('cmdTarget').style.display = both ? '' : 'none';
+  if (!both && ch && ch.kind === 'serial') cmdSerialRole = ch.role;
+  document.querySelectorAll('#cmdTarget button').forEach(b=>{
+    b.classList.toggle('active', b.dataset.r === (ch && ch.kind === 'serial' ? ch.role : 'main'));
+  });
+}
+
+// 串口写入：Web Serial 的 writable 与 readable 锁相互独立，可同时持有；每次写完立即释放
+async function serialWrite(role, bytes){
+  const s = serial[role];
+  if (!s.port || !s.port.writable) throw new Error('串口不可写');
+  const w = s.port.writable.getWriter();
+  try { await w.write(new Uint8Array(bytes)); }
+  finally { try { w.releaseLock(); } catch(_){} }
+}
+
+async function writeCmd(bytes, target){
+  const ch = target || cmdChannel();
+  if (!ch) { log('未连接，无法发送指令。','e'); return false; }
+  try {
+    if (ch.kind === 'ble') await rxChar.writeValue(new Uint8Array(bytes));
+    else await serialWrite(ch.role, bytes);
+    return true;
+  } catch(e){
+    log('发送指令失败（' + channelName(ch) + '）：' + e.message,'e');
+    return false;
+  }
 }
 
 // ===================== Web Serial（CH340K）=====================
@@ -532,6 +588,7 @@ async function serialConnect(role){
     $(btn).textContent = '断开'+name+'串口';
     $(btn).classList.add('warn');
     log(name+'串口已打开（921600），等待数据…','ok');
+    updateCmdChannelUI();
     readSerialLoop(role);
   } catch(e){
     log(name+'串口连接失败：'+e.message,'e');
@@ -614,11 +671,13 @@ function serialStart(){
   if (filterOn){ ensureFilter(); resetFilter(); }
   if (hpOn){ ensureHP(); resetHP(); }
   $('btnConnect').disabled = true;
-  $('btnCal').disabled = true;
-  $('btnRestDef').disabled = true;
-  $('btnReadTemp').disabled = true;
+  // 串口模式同样支持控制指令（恢复默认、请求温度、发送校准因子）
+  $('btnCal').disabled = false;
+  $('btnRestDef').disabled = false;
+  $('btnReadTemp').disabled = false;
   $('btnRec').disabled = false;
   $('btnZero').disabled = false;
+  updateCmdChannelUI();
   log('串口数据已接入，蓝牙已禁用。','ok');
 }
 
@@ -638,8 +697,16 @@ function onSerialData(data, role){
   merged.set(s.buf, 0); merged.set(data, s.buf.length);
   s.buf = merged;
 
-  // 解析 3 字节帧：2 字节大端有符号 + 校验和
-  while (s.buf.length >= 3){
+  // 解析数据流：指令响应与 3 字节重量点混排，设备只在重量帧边界插入响应
+  while (true){
+    // 温度响应帧 0x54 0xDD + 4 字节（4 字节大端有符号）
+    if (s.buf.length >= 2 && s.buf[0] === 0x54 && s.buf[1] === 0xDD){
+      if (s.buf.length < 6) break;              // 响应未收全，等下一包，不丢字节
+      processTemperature(s.buf.slice(0, 6));
+      s.buf = s.buf.slice(6);
+      continue;
+    }
+    if (s.buf.length < 3) break;                // 不足一个重量点
     const hi = s.buf[0], lo = s.buf[1], ck = s.buf[2];
     if (((hi + lo) & 0xFF) === ck){
       let val = (hi << 8) | lo;
@@ -705,6 +772,8 @@ async function serialDisconnect(role){
   const btn = role==='main'?'btnSerialMain':'btnSerialSub';
   $(btn).textContent = name+'串口';
   $(btn).classList.remove('warn');
+
+  updateCmdChannelUI();
 
   const other = serial[role==='main' ? 'sub' : 'main'];
   if (!other.active){
@@ -1221,15 +1290,21 @@ $('btnReset').onclick = ()=>{
   $('sPeakP').innerHTML='0.0<small> kg</small>'; $('sPeakN').innerHTML='0.0<small> kg</small>';
   log('统计已清零。','i');
 };
-$('btnCal').onclick = ()=>{
+$('btnCal').onclick = async ()=>{
   const std=parseFloat($('calStd').value), meas=parseFloat($('calMeas').value);
   if (!std || !meas){ log('请填写标准砝码值与当前测量值。','e'); return; }
+  const ch = cmdChannel();
+  if (!ch){ log('未连接，无法发送指令。','e'); return; }
   const factor = meas/std;
   const fi = Math.round(factor*10000) & 0xFFFFFFFF;
-  writeCmd([0x54,0xAA,(fi>>>24)&0xFF,(fi>>>16)&0xFF,(fi>>>8)&0xFF,fi&0xFF]);
-  log('发送校准因子：'+factor.toFixed(4)+'（整数 '+fi+'）','ok');
+  if (await writeCmd([0x54,0xAA,(fi>>>24)&0xFF,(fi>>>16)&0xFF,(fi>>>8)&0xFF,fi&0xFF], ch))
+    log('发送校准因子 '+factor.toFixed(4)+'（整数 '+fi+'）→ '+channelName(ch),'ok');
 };
-$('btnRestDef').onclick = ()=>{ writeCmd([0x54,0xF8]); log('已发送：恢复默认比例系数','ok'); };
+$('btnRestDef').onclick = async ()=>{
+  const ch = cmdChannel();
+  if (!ch){ log('未连接，无法发送指令。','e'); return; }
+  if (await writeCmd([0x54,0xF8], ch)) log('已发送：恢复默认比例系数 → '+channelName(ch),'ok');
+};
 $('btnZero').onclick = ()=>{
   if (zeroOn){
     zeroOn=false; zeroMain=0; zeroSub=0;
@@ -1241,7 +1316,18 @@ $('btnZero').onclick = ()=>{
     log('已归零（去皮）：主 '+zeroMain.toFixed(2)+' / 副 '+zeroSub.toFixed(2)+' kg','ok');
   }
 };
-$('btnReadTemp').onclick = ()=>{ writeCmd([0x54,0xDD]); log('已请求温度原始值…','i'); };
+$('btnReadTemp').onclick = async ()=>{
+  const ch = cmdChannel();
+  if (!ch){ log('未连接，无法发送指令。','e'); return; }
+  if (await writeCmd([0x54,0xDD], ch)) log('已请求温度原始值（'+channelName(ch)+'）…','i');
+};
+document.querySelectorAll('#cmdTarget button').forEach(b=>{
+  b.onclick = ()=>{
+    cmdSerialRole = b.dataset.r;
+    updateCmdChannelUI();
+    log('指令目标 → ' + (cmdSerialRole==='main'?'主串口':'副串口'),'i');
+  };
+});
 $('btnSetTempRef').onclick = ()=>{
   const ta=parseFloat($('taIn').value), ya=parseFloat($('yaIn').value);
   if (!ya){ log('请先读取温度原始值并填入 YA。','e'); return; }
@@ -1315,6 +1401,7 @@ $('showChart').onchange = ()=>{
 
 // 初始化
 updateFiltStatus();
+updateCmdChannelUI();
 if (!navigator.bluetooth && !navigator.serial){
   log('当前浏览器不支持 Web Bluetooth 和 Web Serial（iOS/iPadOS 全部不支持），请改用安卓或电脑的 Chrome·Edge。','e');
 } else {
